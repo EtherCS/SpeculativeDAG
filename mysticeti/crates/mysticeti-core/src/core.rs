@@ -179,8 +179,8 @@ impl<H: BlockHandler> Core<H> {
             pevm_executor: if public_config.parameters.enable_pevm_executor {
                 Some(PevmExecutor::new(
                     // [JT]: Sequantial execution for the baseline
-                    // ExecutionMode::Sequential,
-                    ExecutionMode::Parallel,
+                    ExecutionMode::Sequential,
+                    // ExecutionMode::Parallel,
                     public_config.parameters.pevm_workload_type.clone()
                 ))
             } else {
