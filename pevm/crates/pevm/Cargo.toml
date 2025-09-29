@@ -1,0 +1,96 @@
+[package]
+edition = "2021"
+name = "pevm"
+version = "0.1.0"
+
+[features]
+defaults = []
+
+full = ["optimism", "rpc-storage"]
+
+optimism = [
+  "revm/optimism",
+  "dep:op-alloy-consensus",
+  "dep:op-alloy-network",
+  "dep:op-alloy-rpc-types",
+]
+
+rpc-storage = [
+  "dep:alloy-transport",
+  "dep:alloy-transport-http",
+  "dep:reqwest",
+]
+
+global-alloc = ["dep:rpmalloc", "dep:snmalloc-rs", "dep:tikv-jemallocator"]
+
+[dependencies]
+anyhow = "1"
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"
+rand = "0.8"
+ethers.workspace=true
+rlp = "0.5"
+ethereum-types = "0.14"
+hex = "0.4"
+alloy-consensus.workspace = true
+alloy-primitives.workspace = true
+alloy-provider.workspace = true
+alloy-rlp.workspace = true
+alloy-rpc-types-eth.workspace = true
+alloy-trie.workspace = true
+
+bitflags.workspace = true
+bitvec.workspace = true
+dashmap.workspace = true
+hashbrown.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_with = "3.8.1"
+smallvec.workspace = true
+thiserror.workspace = true
+
+revm.workspace = true
+
+tracing.workspace = true
+flate2.workspace = true
+bincode.workspace = true
+serde_json.workspace = true
+
+crossbeam-deque.workspace = true
+crossbeam-channel.workspace = true
+crossbeam-utils.workspace = true
+
+# OP dependencies
+op-alloy-consensus = { workspace = true, optional = true }
+op-alloy-network = { workspace = true, optional = true }
+op-alloy-rpc-types = { workspace = true, optional = true }
+
+# Storage RPC feature dependencies
+alloy-transport = { workspace = true, optional = true }
+alloy-transport-http = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true }
+
+# Various allocators for benchmarks
+rpmalloc = { workspace = true, optional = true }
+snmalloc-rs = { workspace = true, optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+rand.workspace = true
+rayon.workspace = true
+reqwest.workspace = true
+revme.workspace = true
+walkdir.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+harness = false
+name = "mainnet"
+
+[[bench]]
+harness = false
+name = "gigagas"

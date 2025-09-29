@@ -1,0 +1,13 @@
+---
+testbed_id: "dakai-mysticeti"
+benchmark_duration: 30
+cloud_provider: aws
+token_file: "/home/ubuntu/.aws/credentials"
+ssh_private_key_file: "/home/ubuntu/.ssh/dakai_dev.pem"
+regions:
+  - us-east-1
+specs: c4.4xlarge
+repository:
+  url: https://github.com/DakaiKang/congestion_control
+  commit: stream
+

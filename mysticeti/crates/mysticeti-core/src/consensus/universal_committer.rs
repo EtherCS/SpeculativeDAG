@@ -38,21 +38,21 @@ impl UniversalCommitter {
                 let Some(leader) = committer.elect_leader(round) else {
                     continue;
                 };
-                tracing::debug!(
-                    "Trying to decide {} with {committer}",
-                    format_authority_round(leader, round)
-                );
+                // tracing::debug!(
+                //     "[H] Trying to decide {} with {committer}",
+                //     format_authority_round(leader, round)
+                // );
 
                 // Try to directly decide the leader.
                 let mut status = committer.try_direct_decide(leader, round);
                 self.update_metrics(&status, true);
-                tracing::debug!("Outcome of direct rule: {status}");
+                // tracing::debug!("[H] Outcome of direct rule: {status}");
 
                 // If we can't directly decide the leader, try to indirectly decide it.
                 if !status.is_decided() {
                     status = committer.try_indirect_decide(leader, round, leaders.iter());
                     self.update_metrics(&status, false);
-                    tracing::debug!("Outcome of indirect rule: {status}");
+                    // tracing::debug!("[H] Outcome of indirect rule: {status}");
                 }
 
                 leaders.push_front(status);

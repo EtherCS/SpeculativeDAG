@@ -1,0 +1,4 @@
+🔒 Thread 0 processing transaction 6 accessing accounts: [0xae111b281f0245809f4d7b647272f1884375eb7f, 0xba798ee40ed935ed23ecb0072b68d030a4f4ced8]
+🔒 Thread 3 processing transaction 1 accessing accounts: [0xfdb9d6f69ee3ee212c132f538f7b8edc405854bb, 0x04f91d095ae21cadd8aeb23942d5a8b2d51c7c7e]
+🔒 Thread 2 processing transaction 3 accessing accounts: [0xb69649592233729fabb2241679eab1c169d1a7d3, 0xba798ee40ed935ed23ecb0072b68d030a4f4ced8]
+🔒 Thread 1 processing transaction 72 accessing accounts: [0x26489a4e0210c8f7786853306e938db28240cd92, 0xa31d9544bcb0aa7402505ade5144d3fa1f6aea8c]

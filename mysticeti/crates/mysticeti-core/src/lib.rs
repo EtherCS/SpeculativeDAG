@@ -25,6 +25,8 @@ pub mod network;
 pub mod prometheus;
 mod range_map;
 mod runtime;
+mod schedule_fetcher;
+mod scheduler;
 mod serde;
 #[cfg(test)]
 #[cfg(feature = "simulator")]

@@ -3,11 +3,15 @@
 
 use std::{
     net::{IpAddr, Ipv4Addr},
-    sync::Arc,
+    sync::{Arc},
 };
+
+use tokio::sync::mpsc;
 
 use ::prometheus::Registry;
 use eyre::{eyre, Context, Result};
+use tokio::sync::Mutex;
+use pevm::api::{PevmAPI, APIError, PevmExecutor, ExecutionMode, WorkloadType, PevmTransactionGenerator, PevmScheduler};
 
 use crate::{
     block_handler::{RealBlockHandler, TestCommitHandler},
@@ -24,6 +28,8 @@ use crate::{
     transactions_generator::TransactionGenerator,
     types::AuthorityIndex,
     wal::{self, walf},
+    schedule_fetcher::ScheduleFetcher,
+    // scheduler::Scheduler,
 };
 
 pub struct Validator {
@@ -83,13 +89,40 @@ impl Validator {
             public_config.parameters.consensus_only,
         );
 
+        let committee_size = *(&committee.len()) as u64;
+
+        let workload_type = public_config.parameters.pevm_workload_type.clone();
+
+        let in_memory_storage = pevm::api::load_in_memory_storage(&workload_type);
+        let account_addresses = pevm::api::load_account_addresses(&workload_type);
+
+        let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) = mpsc::channel(100);
+        let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(100);
+        
+        let mut pevm_transaction_generator = PevmTransactionGenerator::new(workload_type.clone(), authority, committee_size, pevm_txn_sender, insufficient_txn_signal_receiver);
+
+        let gen_handle = tokio::spawn(async move {
+            pevm_transaction_generator.run().await;
+        });
+
+        let pevm_scheduler = Arc::new(PevmScheduler::new(pevm_txn_receiver));
+        let mut sched_for_run = Arc::clone(&pevm_scheduler);
+
+        let schedule_handle = {
+            let s = Arc::clone(&pevm_scheduler);
+            tokio::spawn(async move { s.run().await; })
+        };
+
         TransactionGenerator::start(
             block_sender,
             authority,
             client_parameters,
             public_config.clone(),
             metrics.clone(),
+            pevm_scheduler,
+            insufficient_txn_signal_sender,
         );
+        
         let committed_transaction_log =
             TransactionLog::start(private_config.committed_transactions_log())
                 .expect("Failed to open committed transaction log for write");

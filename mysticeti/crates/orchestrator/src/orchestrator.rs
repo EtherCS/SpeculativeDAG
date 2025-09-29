@@ -225,6 +225,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
         let command = [
             &format!("git fetch origin {commit}"),
             &format!("(git checkout -b {commit} || git checkout -f origin/{commit})"),
+            "cd mysticeti",
             "source $HOME/.cargo/env",
             "RUSTFLAGS=-Ctarget-cpu=native cargo build --release",
         ]
@@ -270,7 +271,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             .await;
 
         let id = "configure";
-        let repo_name = self.settings.repository_name();
+        let repo_name = self.settings.repository_name() + "/mysticeti";
         let context = CommandContext::new()
             .run_background(id.into())
             .with_log_file(format!("~/{id}.log").into())
@@ -342,6 +343,8 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             .protocol_commands
             .node_command(instances.clone(), parameters);
 
+        display::action(&format!("\n {:?}", targets));
+
         let repo = self.settings.repository_name();
         let context = CommandContext::new()
             .run_background("node".into())
@@ -366,10 +369,12 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
 
         // Select the instances to run.
         let (_, nodes, _) = self.select_instances(parameters)?;
-
+        
+        display::action("\nvalidators selected");
         // Boot one node per instance.
         self.boot_nodes(nodes, parameters).await?;
 
+        display::action("\n booting is done");
         display::done();
         Ok(())
     }
@@ -391,7 +396,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             .protocol_commands
             .client_command(clients.clone(), parameters);
 
-        let repo = self.settings.repository_name();
+        let repo = self.settings.repository_name() + "/mysticeti";
         let context = CommandContext::new()
             .run_background("client".into())
             .with_log_file("~/client.log".into())
