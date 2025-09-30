@@ -527,9 +527,10 @@ impl fmt::Display for StatementBlock {
             write!(f, "{},", include)?;
         }
         write!(f, "](")?;
-        for statement in self.statements() {
-            write!(f, "{},", statement)?;
-        }
+        // for statement in self.statements() {
+        //     write!(f, "{},", statement)?;
+        // }
+        write!(f, "statements({})", self.statements.len())?;
         write!(f, ")")
     }
 }

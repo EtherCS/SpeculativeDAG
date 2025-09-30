@@ -5,7 +5,7 @@ use std::{
     collections::{HashSet, VecDeque},
     mem,
     sync::{atomic::AtomicU64, Arc},
-    time::{Instant, Duration},
+    time::{Duration, Instant},
 };
 
 use minibytes::Bytes;
@@ -14,12 +14,7 @@ use crate::{
     block_handler::BlockHandler,
     block_manager::BlockManager,
     block_store::{
-        BlockStore,
-        BlockWriter,
-        CommitData,
-        OwnBlockData,
-        WAL_ENTRY_COMMIT,
-        WAL_ENTRY_PAYLOAD,
+        BlockStore, BlockWriter, CommitData, OwnBlockData, WAL_ENTRY_COMMIT, WAL_ENTRY_PAYLOAD,
         WAL_ENTRY_STATE,
     },
     committee::Committee,
@@ -39,11 +34,11 @@ use crate::{
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 
-use pevm::api::{PevmAPI, APIError, TransactionWithHint, PevmExecutor, ExecutionMode, WorkloadType};
-use pevm::serialization::deserializer;
+use pevm::api::{ExecutionMode, PevmExecutor, TransactionWithHint};
+// use pevm::serialization::deserializer;
 pub use ethers::types::Address;
-use pevm::{Bytecodes, ChainState, EvmAccount, InMemoryStorage};
-use pevm::chain::PevmEthereum;
+// use pevm::{Bytecodes, ChainState, EvmAccount, InMemoryStorage};
+// use pevm::chain::PevmEthereum;
 
 pub struct Core<H: BlockHandler> {
     block_manager: BlockManager,
@@ -180,8 +175,12 @@ impl<H: BlockHandler> Core<H> {
                 Some(PevmExecutor::new(
                     // [JT]: Sequantial execution for the baseline
                     ExecutionMode::Sequential,
-                    // ExecutionMode::Parallel,
-                    public_config.parameters.pevm_workload_type.clone()
+                    public_config.parameters.pevm_workload_type.clone(),
+                    private_config
+                        .account_storage_path
+                        .to_str()
+                        .unwrap()
+                        .to_string(),
                 ))
             } else {
                 None
@@ -298,7 +297,11 @@ impl<H: BlockHandler> Core<H> {
             }
         }
 
-        tracing::debug!("For round {}, the length of statements is {}", clock_round, statements.len());
+        tracing::debug!(
+            "For round {}, the length of statements is {}",
+            clock_round,
+            statements.len()
+        );
 
         assert!(!includes.is_empty());
         let time_ns = timestamp_utc().as_nanos();
@@ -431,15 +434,17 @@ impl<H: BlockHandler> Core<H> {
         }
     }
 
-    pub fn handle_committed_subdag_with_pevm(
-        &mut self,
-        committed: Vec<CommittedSubDag>,
-    ) {
+    // [JT]TODO: this should be made async and consistent with the consensus order
+    pub fn handle_committed_subdag_with_pevm(&mut self, committed: Vec<CommittedSubDag>) {
         for commit in &committed {
             for block in &commit.blocks {
                 self.epoch_manager
                     .observe_committed_block(block, &self.committee);
-                tracing::info!("executing block of round {} from replica {}", block.reference().round, block.reference().authority);
+                tracing::info!(
+                    "executing block of round {} from replica {}",
+                    block.reference().round,
+                    block.reference().authority
+                );
                 self.execute_block_in_pevm(block.statements());
             }
         }
@@ -457,12 +462,14 @@ impl<H: BlockHandler> Core<H> {
         if txs.len() > 0 {
             tracing::info!("Executing {} transactions in pevm", txs.len());
             self.executed_txns += txs.len();
-            self.pevm_executor.as_mut().expect("executor missing").execute(txs);
+            self.pevm_executor
+                .as_mut()
+                .expect("executor missing")
+                .execute(txs);
             let elapsed: Duration = self.start_time_point.elapsed();
             let secs_f64: f64 = elapsed.as_secs_f64();
-            tracing::error!("Throughput = {}", self.executed_txns as f64/secs_f64);
+            tracing::error!("Throughput = {}", self.executed_txns as f64 / secs_f64);
         }
-        
     }
 
     pub fn handle_committed_subdag(

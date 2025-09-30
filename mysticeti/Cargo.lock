@@ -4080,6 +4080,7 @@ dependencies = [
  "eyre",
  "futures",
  "mysticeti-core",
+ "pevm",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    fs,
-    io,
+    fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
@@ -99,7 +98,7 @@ pub mod node_defaults {
     }
 
     pub fn default_pevm_workload_type() -> pevm::api::WorkloadType {
-        pevm::api::WorkloadType::ERC20(1, 1, 4)
+        pevm::api::WorkloadType::ERC20(5, 5, 8)
     }
 }
 
@@ -122,6 +121,13 @@ impl Default for NodeParameters {
 }
 
 impl ImportExport for NodeParameters {}
+
+impl NodeParameters {
+    pub fn with_pevm_workload_type(mut self, workload_type: pevm::api::WorkloadType) -> Self {
+        self.pevm_workload_type = workload_type;
+        self
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NodeIdentifier {
@@ -220,6 +226,8 @@ pub struct NodePrivateConfig {
     authority: AuthorityIndex,
     pub keypair: Signer,
     pub storage_path: PathBuf,
+    pub account_storage_path: PathBuf,
+    pub account_addresses_path: PathBuf,
 }
 
 impl NodePrivateConfig {
@@ -228,10 +236,17 @@ impl NodePrivateConfig {
             authority: index,
             keypair: dummy_signer(),
             storage_path: PathBuf::from("storage"),
+            account_storage_path: PathBuf::from("account_storage"),
+            account_addresses_path: PathBuf::from("account_addresses"),
         }
     }
 
-    pub fn new_for_benchmarks(working_dir: &Path, committee_size: usize) -> Vec<Self> {
+    pub fn new_for_benchmarks(
+        working_dir: &Path,
+        committee_size: usize,
+        account_storage_path: PathBuf,
+        account_addresses_path: PathBuf,
+    ) -> Vec<Self> {
         Signer::new_for_test(committee_size)
             .into_iter()
             .enumerate()
@@ -242,6 +257,8 @@ impl NodePrivateConfig {
                     authority,
                     keypair,
                     storage_path: path,
+                    account_storage_path: account_storage_path.clone(),
+                    account_addresses_path: account_addresses_path.clone(),
                 }
             })
             .collect()
@@ -253,6 +270,16 @@ impl NodePrivateConfig {
 
     pub fn default_storage_path(authority: AuthorityIndex) -> PathBuf {
         format!("storage-{authority}").into()
+    }
+
+    // [JT]: Hardcoded for now
+    pub fn default_account_storage_path() -> PathBuf {
+        format!("storage_5_5_8.json").into()
+    }
+
+    // [JT]: Hardcoded for now
+    pub fn default_account_addresses_path() -> PathBuf {
+        format!("account_addresses_5_5_8.bin").into()
     }
 
     pub fn certified_transactions_log(&self) -> PathBuf {

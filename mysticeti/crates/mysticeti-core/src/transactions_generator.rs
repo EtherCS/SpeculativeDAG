@@ -3,20 +3,20 @@
 
 use std::{cmp::min, sync::Arc, time::Duration};
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use tokio::sync::{mpsc,Mutex};
-use tokio::time::sleep;
-use tokio::task;
-use pevm::api::{PevmAPI, APIError, TransactionWithHint, PevmTransactionGenerator, PevmScheduler};
-use pevm::serialization::deserializer;
 pub use ethers::types::Address;
+use pevm::api::{APIError, PevmAPI, PevmScheduler, PevmTransactionGenerator, TransactionWithHint};
+use pevm::serialization::deserializer;
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use tokio::sync::{mpsc, Mutex};
+use tokio::task;
+use tokio::time::sleep;
 
 use crate::{
     config::{ClientParameters, NodePublicConfig},
     crypto::AsBytes,
     metrics::Metrics,
     runtime::{self, timestamp_utc},
-    types::{AuthorityIndex, Transaction, BaseStatement},
+    types::{AuthorityIndex, BaseStatement, Transaction},
 };
 
 pub struct TransactionGenerator {
@@ -45,7 +45,7 @@ impl TransactionGenerator {
             client_parameters.load,
             client_parameters.initial_delay
         );
-        
+
         let committee_size = *(&node_public_config.identifiers.len()) as u64;
         let workload_type = node_public_config.parameters.pevm_workload_type.clone();
 
@@ -61,10 +61,15 @@ impl TransactionGenerator {
         );
     }
 
-
-    pub async fn run(mut self, pevm_scheduler: Arc<PevmScheduler>, id: AuthorityIndex, insufficient_txn_signal_sender: mpsc::Sender<usize>) {
+    pub async fn run(
+        mut self,
+        pevm_scheduler: Arc<PevmScheduler>,
+        id: AuthorityIndex,
+        insufficient_txn_signal_sender: mpsc::Sender<usize>,
+    ) {
         let load = self.client_parameters.load;
-        let transactions_per_block_interval = (load + 9) / (100/Self::TARGET_BLOCK_INTERVAL.as_millis() as usize); // round up division
+        let transactions_per_block_interval =
+            (load + 9) / (100 / Self::TARGET_BLOCK_INTERVAL.as_millis() as usize); // round up division
         tracing::info!(
             "Generating {transactions_per_block_interval} transactions per {} ms",
             Self::TARGET_BLOCK_INTERVAL.as_millis()
@@ -74,8 +79,8 @@ impl TransactionGenerator {
 
         let mut counter = 0;
         let mut tx_to_report = 0;
-        let mut random: u64 = self.rng.gen(); // 8 bytes
-        let zeros = vec![0u8; self.client_parameters.transaction_size - 8 - 8]; // 8 bytes timestamp + 8 bytes random
+        // let mut random: u64 = self.rng.gen(); // 8 bytes
+        // let zeros = vec![0u8; self.client_parameters.transaction_size - 8 - 8]; // 8 bytes timestamp + 8 bytes random
 
         let mut interval = runtime::TimeInterval::new(Self::TARGET_BLOCK_INTERVAL);
         runtime::sleep(self.client_parameters.initial_delay).await;
@@ -88,7 +93,7 @@ impl TransactionGenerator {
             for _ in 0..transactions_per_block_interval {
                 let batch = pevm_scheduler.fetch_batch(1).await;
                 let fetched_txn = if let Some(txn) = batch.into_iter().next() {
-                    // tracing::info!("fetched {}-th txn: {:?}", &x, &txn);
+                    tracing::debug!("fetched {}-th txn: {:?}", &x, &txn);
                     x += 1;
                     txn
                 } else {
@@ -100,7 +105,11 @@ impl TransactionGenerator {
                 block.push(Transaction::new(transaction));
                 block_size += self.client_parameters.transaction_size;
 
-                // tracing::debug!("Block_size = {}, max_block_size = {}", block_size, max_block_size);
+                tracing::debug!(
+                    "Block_size = {}, max_block_size = {}",
+                    block_size,
+                    max_block_size
+                );
 
                 counter += 1;
                 tx_to_report += 1;
@@ -134,8 +143,10 @@ impl TransactionGenerator {
         Duration::from_millis(u64::from_le_bytes(bytes))
     }
 
-
-    pub async fn read_workload_from_file(pevm_api: Arc<Mutex<PevmAPI>>, file_path: &str) -> Result<(), APIError> {
+    pub async fn read_workload_from_file(
+        pevm_api: Arc<Mutex<PevmAPI>>,
+        file_path: &str,
+    ) -> Result<(), APIError> {
         let mut reader = match deserializer::ChunkFileReader::open(file_path) {
             Ok(r) => r,
             Err(e) => {
@@ -160,66 +171,64 @@ impl TransactionGenerator {
                         } else {
                             println!("Read {} transactions from workload file", b.len());
                         }
-                    },
+                    }
                     Err(e) => {
                         tracing::error!("Error reading workload file {}: {}", file_path, e);
                         return Err(APIError::NoWorkloadFile);
                     }
                 };
-                let txs = batch.unwrap().into_iter().map(|(raw_hex, caller)| {
-                    TransactionWithHint {
-                        raw_hex,
-                        caller,
-                        hint: String::new(), // [TODO] Placeholder
-                    }
-                }).collect();
+                let txs = batch
+                    .unwrap()
+                    .into_iter()
+                    .map(|(raw_hex, caller)| {
+                        TransactionWithHint {
+                            raw_hex,
+                            caller,
+                            hint: String::new(), // [TODO] Placeholder
+                        }
+                    })
+                    .collect();
                 pevm_api.lock().await.add_transactions(txs).await;
             } else {
-                sleep(Duration::from_millis(10)).await; 
+                sleep(Duration::from_millis(10)).await;
             }
         }
-
     }
 
     pub async fn schedule(pevm_api: Arc<Mutex<PevmAPI>>) {
-    let mut empty = false;
-    loop {
-        if empty {
-            sleep(Duration::from_millis(10)).await;
-        }
+        let mut empty = false;
+        loop {
+            if empty {
+                sleep(Duration::from_millis(10)).await;
+            }
 
-        let front_item = {
-            let guard = pevm_api.lock().await;
-            let mut queue = guard.txns_queue.lock().await;
-            queue.pop_front()
-        };
+            let front_item = {
+                let guard = pevm_api.lock().await;
+                let mut queue = guard.txns_queue.lock().await;
+                queue.pop_front()
+            };
 
-        if let Some(transaction) = front_item {
-            empty = false;
-            // tracing::info!("Scheduling transaction: {:?}", transaction);
-            // do_some_scheduling_work(transaction).await;
-            let guard = pevm_api.lock().await;
-            // TODO: Wrap scheduled_txns in a Arc<Mutex<>> to release the guard earlier
-            let mut scheduled_queue = guard.scheduled_txns.lock().await;
-            scheduled_queue.push_back(transaction);
-        } else {
-            empty = true;
-            continue;
+            if let Some(transaction) = front_item {
+                empty = false;
+                // tracing::info!("Scheduling transaction: {:?}", transaction);
+                // do_some_scheduling_work(transaction).await;
+                let guard = pevm_api.lock().await;
+                // TODO: Wrap scheduled_txns in a Arc<Mutex<>> to release the guard earlier
+                let mut scheduled_queue = guard.scheduled_txns.lock().await;
+                scheduled_queue.push_back(transaction);
+            } else {
+                empty = true;
+                continue;
+            }
         }
-        
     }
 }
 
-}
-
-
 fn split_bytes_by_pipe(data: &[u8]) -> Vec<Vec<u8>> {
-        data.split(|&b| b == b'|')
-            .map(|chunk| chunk.to_vec())
-            .collect()
+    data.split(|&b| b == b'|')
+        .map(|chunk| chunk.to_vec())
+        .collect()
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -243,35 +252,39 @@ mod tests {
     #[test]
     fn test_decode_transaction() {
         let mut transaction = Vec::with_capacity(512);
-            transaction.extend_from_slice(&123u64.to_be_bytes()); // 8 bytes
-            transaction.push(b'|');
-            let raw_hex = String::from("0x1234567890abcdef");
-            transaction.extend_from_slice(raw_hex.as_bytes());
-            transaction.push(b'|');
-            let caller: Address = "0xabcdef1234567890abcdef1234567890abcdef12"
-                .parse()
-                .expect("Invalid address");
-            transaction.extend_from_slice(caller.as_bytes());
-            transaction.push(b'|');
+        transaction.extend_from_slice(&123u64.to_be_bytes()); // 8 bytes
+        transaction.push(b'|');
+        let raw_hex = String::from("0x1234567890abcdef");
+        transaction.extend_from_slice(raw_hex.as_bytes());
+        transaction.push(b'|');
+        let caller: Address = "0xabcdef1234567890abcdef1234567890abcdef12"
+            .parse()
+            .expect("Invalid address");
+        transaction.extend_from_slice(caller.as_bytes());
+        transaction.push(b'|');
 
-            let statement = BaseStatement::Share(Transaction::new(transaction));
+        let statement = BaseStatement::Share(Transaction::new(transaction));
 
-            if let BaseStatement::Share(data) = statement {
-                let parts = split_bytes_by_pipe(data.data());
-                let raw_hex = String::from_utf8_lossy(&parts[1]);
-                println!("Raw hex: {}", raw_hex);
-                let caller_bytes: [u8; 20] = parts[2].as_slice().try_into().expect("address must be 20 bytes");
-                let caller = Address::from(caller_bytes);
-                println!("Caller: {:?}", caller);
-            }
-            
+        if let BaseStatement::Share(data) = statement {
+            let parts = split_bytes_by_pipe(data.data());
+            let raw_hex = String::from_utf8_lossy(&parts[1]);
+            println!("Raw hex: {}", raw_hex);
+            let caller_bytes: [u8; 20] = parts[2]
+                .as_slice()
+                .try_into()
+                .expect("address must be 20 bytes");
+            let caller = Address::from(caller_bytes);
+            println!("Caller: {:?}", caller);
+        }
     }
 
     #[test]
     fn test_decode_txn_with_hint() {
-        let tx = TransactionWithHint{
+        let tx = TransactionWithHint {
             raw_hex: String::from("0x1234567890abcdef"),
-            caller: "0xabcdef1234567890abcdef1234567890abcdef12".parse().expect("Invalid address"),
+            caller: "0xabcdef1234567890abcdef1234567890abcdef12"
+                .parse()
+                .expect("Invalid address"),
             hint: String::from(""),
         };
         let encoded: Vec<u8> = bincode::serialize(&tx).unwrap();

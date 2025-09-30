@@ -13,3 +13,4 @@ mysticeti-core = { path = "../mysticeti-core" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+pevm = { path = "../../../pevm/crates/pevm" }

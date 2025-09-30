@@ -39,6 +39,12 @@ enum Operation {
         /// Path to the file holding the node parameters. If not provided, default parameters are used.
         #[clap(long, value_name = "FILE")]
         node_parameters_path: Option<PathBuf>,
+        /// Path to the file holding the account storage (for benchmarks).
+        #[clap(long, value_name = "FILE")]
+        account_storage_path: PathBuf,
+        /// Path to the file holding the account addresses (for benchmarks).
+        #[clap(long, value_name = "FILE")]
+        account_addresses_path: PathBuf,
     },
     /// Run a validator node.
     Run {
@@ -84,7 +90,15 @@ async fn main() -> Result<()> {
             ips,
             working_directory,
             node_parameters_path,
-        } => benchmark_genesis(ips, working_directory, node_parameters_path)?,
+            account_storage_path,
+            account_addresses_path,
+        } => benchmark_genesis(
+            ips,
+            working_directory,
+            node_parameters_path,
+            account_storage_path,
+            account_addresses_path,
+        )?,
         Operation::Run {
             authority,
             committee_path,
@@ -114,6 +128,8 @@ fn benchmark_genesis(
     ips: Vec<IpAddr>,
     working_directory: PathBuf,
     node_parameters_path: Option<PathBuf>,
+    account_storage_path: PathBuf,
+    account_addresses_path: PathBuf,
 ) -> Result<()> {
     tracing::info!("Generating benchmark genesis files");
     fs::create_dir_all(&working_directory).wrap_err(format!(
@@ -151,8 +167,12 @@ fn benchmark_genesis(
     );
 
     // Generate the private node config files.
-    let node_private_configs =
-        NodePrivateConfig::new_for_benchmarks(&working_directory, committee_size);
+    let node_private_configs = NodePrivateConfig::new_for_benchmarks(
+        &working_directory,
+        committee_size,
+        account_storage_path,
+        account_addresses_path,
+    );
     for (i, private_config) in node_private_configs.into_iter().enumerate() {
         fs::create_dir_all(&private_config.storage_path)
             .expect("Failed to create storage directory");
@@ -222,15 +242,36 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
     tracing::warn!(
         "Starting validator {authority} in dryrun mode (committee size: {committee_size})"
     );
+    let num_clusters = 5;
+    let num_families_per_cluster = 5;
+    let num_people_per_family = 8;
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
     let client_parameters = ClientParameters::default();
-    let node_parameters = NodeParameters::default();
+    let workload_type = pevm::api::WorkloadType::ERC20(
+        num_clusters,
+        num_families_per_cluster,
+        num_people_per_family,
+    );
+    let node_parameters = NodeParameters::default().with_pevm_workload_type(workload_type);
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryrun-validator-{authority}"));
-    let mut all_private_config =
-        NodePrivateConfig::new_for_benchmarks(&working_dir, committee_size);
+    let account_storage_path = PathBuf::from(format!(
+        "storage_{}_{}_{}.json",
+        num_clusters, num_families_per_cluster, num_people_per_family
+    ));
+    let account_addresses_path = PathBuf::from(format!(
+        "account_addresses_{}_{}_{}.bin",
+        num_clusters, num_families_per_cluster, num_people_per_family
+    ));
+
+    let mut all_private_config = NodePrivateConfig::new_for_benchmarks(
+        &working_dir,
+        committee_size,
+        account_storage_path,
+        account_addresses_path,
+    );
     let private_config = all_private_config.remove(authority as usize);
     match fs::remove_dir_all(&working_dir) {
         Ok(_) => {}
