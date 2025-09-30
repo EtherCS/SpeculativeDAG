@@ -93,8 +93,8 @@ impl Validator {
 
         let workload_type = public_config.parameters.pevm_workload_type.clone();
 
-        let in_memory_storage = pevm::api::load_in_memory_storage(&workload_type);
-        let account_addresses = pevm::api::load_account_addresses(&workload_type);
+        // let in_memory_storage = pevm::api::load_in_memory_storage(&workload_type);
+        // let account_addresses = pevm::api::load_account_addresses(&workload_type);
 
         let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) = mpsc::channel(100);
         let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(100);
@@ -106,7 +106,7 @@ impl Validator {
         });
 
         let pevm_scheduler = Arc::new(PevmScheduler::new(pevm_txn_receiver));
-        let mut sched_for_run = Arc::clone(&pevm_scheduler);
+        // let mut sched_for_run = Arc::clone(&pevm_scheduler);
 
         let schedule_handle = {
             let s = Arc::clone(&pevm_scheduler);

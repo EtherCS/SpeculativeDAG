@@ -1,4 +1,5 @@
 #![allow(unused)]
+#![allow(missing_docs)]
 
 // Provide Pevm API for transaction scheduling and execution, used by Mysticeti.
 use std::{fmt, fs};
@@ -66,7 +67,7 @@ fn load(path: &str) -> anyhow::Result<InMemoryStorage> {
 pub fn load_in_memory_storage(workload_type: &WorkloadType) -> InMemoryStorage {
     match workload_type {
         WorkloadType::ERC20(num_clusters, num_families_per_cluster, num_people_per_family) => {
-            let path = format!("/home/ubuntu/congestion_control/pevm/crates/pevm/storage_{}_{}_{}.json", num_clusters, num_families_per_cluster, num_people_per_family);
+            let path = format!("/home/jianting/rust/github.com/SpeculativeDAG/pevm/crates/pevm/storage_{}_{}_{}.json", num_clusters, num_families_per_cluster, num_people_per_family);
             println!("in memory storage file path: {}", path);
             load(&path).unwrap()
         }
@@ -76,7 +77,7 @@ pub fn load_in_memory_storage(workload_type: &WorkloadType) -> InMemoryStorage {
 pub fn load_account_addresses(workload_type: &WorkloadType) -> Vec<(AlloyAddress, Vec<Vec<AlloyAddress>>)> {
     match workload_type {
         WorkloadType::ERC20(num_clusters, num_families_per_cluster, num_people_per_family) => {
-            let path = format!("/home/ubuntu/congestion_control/pevm/crates/pevm/account_addresses_{}_{}_{}.bin", num_clusters, num_families_per_cluster, num_people_per_family);
+            let path = format!("/home/jianting/rust/github.com/SpeculativeDAG/pevm/crates/pevm/account_addresses_{}_{}_{}.bin", num_clusters, num_families_per_cluster, num_people_per_family);
             println!("account addresses file path: {}", path);
             load_addresses(&path).unwrap()
         }
@@ -210,6 +211,7 @@ impl Default for WorkloadType {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct PevmExecutor {
     pub execution_mode: ExecutionMode,
     pub storage: InMemoryStorage,
@@ -287,7 +289,7 @@ impl PevmExecutor {
 }
 
 
-
+#[derive(Debug)]
 pub struct PevmTransactionGenerator {
     pub workload_type: WorkloadType,
     pub clusters: Vec::<(AlloyAddress, Vec<Vec<AlloyAddress>>)>,
@@ -468,7 +470,7 @@ impl PevmTransactionGenerator {
 
 }
 
-
+#[derive(Debug)]
 pub struct PevmScheduler {
     scheduled_txns: Arc<Mutex<Vec<TransactionWithHint>>>,
     pevm_txn_receiver: Mutex<mpsc::Receiver<Vec<(String, Address)>>>,

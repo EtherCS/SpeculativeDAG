@@ -3,7 +3,7 @@
 
 # bash run.sh
 
-export RUST_LOG=trace,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG
+export RUST_LOG=warn,mysticeti_core::consensus=trace,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::validator=DEBUG,pevm=DEBUG
 
 tmux kill-server || true
 
