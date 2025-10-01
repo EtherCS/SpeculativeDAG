@@ -109,7 +109,7 @@ pub fn committee_and_cores_persisted_epoch_duration(
             );
 
             let private_config = NodePrivateConfig::new_for_tests(authority);
-
+            let (ordered_txns_sender, _ordered_txns_receiver) = tokio::sync::mpsc::channel(1000);
             println!("Opening core {authority}");
             let core = Core::open(
                 block_handler,
@@ -121,6 +121,7 @@ pub fn committee_and_cores_persisted_epoch_duration(
                 recovered,
                 wal_writer,
                 CoreOptions::test(),
+                ordered_txns_sender,
             );
             (core, reporter)
         })

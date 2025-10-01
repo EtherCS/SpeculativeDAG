@@ -119,19 +119,10 @@ impl<H: BlockHandler, S: SyncerSignals, C: CommitObserver> Syncer<H, S, C> {
             let committed_subdag = self
                 .commit_observer
                 .handle_commit(self.core.block_store(), newly_committed);
-            match self.core.pevm_executor{
-                Some(_) => {
-                    self.core.handle_committed_subdag_with_pevm(committed_subdag);
-                }
-                None => {
-                    self.core.handle_committed_subdag(
-                        committed_subdag,
-                        &self.commit_observer.aggregator_state(),
-                    );
-                }
-            }
-                
-            
+            self.core.handle_committed_subdag(
+                committed_subdag,
+                &self.commit_observer.aggregator_state(),
+            );
         }
     }
 

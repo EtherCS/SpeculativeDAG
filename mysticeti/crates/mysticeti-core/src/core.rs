@@ -5,10 +5,11 @@ use std::{
     collections::{HashSet, VecDeque},
     mem,
     sync::{atomic::AtomicU64, Arc},
-    time::{Duration, Instant},
 };
 
 use minibytes::Bytes;
+
+use tokio::sync::mpsc;
 
 use crate::{
     block_handler::BlockHandler,
@@ -34,12 +35,6 @@ use crate::{
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 
-use pevm::api::{ExecutionMode, PevmExecutor, TransactionWithHint};
-// use pevm::serialization::deserializer;
-pub use ethers::types::Address;
-// use pevm::{Bytecodes, ChainState, EvmAccount, InMemoryStorage};
-// use pevm::chain::PevmEthereum;
-
 pub struct Core<H: BlockHandler> {
     block_manager: BlockManager,
     pending: VecDeque<(WalPosition, MetaStatement)>,
@@ -59,9 +54,8 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
-    pub pevm_executor: Option<PevmExecutor>,
-    executed_txns: usize,
-    start_time_point: Instant,
+    /// The sender of ordered blocks to executor
+    ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
 }
 
 pub struct CoreOptions {
@@ -86,6 +80,7 @@ impl<H: BlockHandler> Core<H> {
         recovered: RecoveredState,
         mut wal_writer: WalWriter,
         options: CoreOptions,
+        ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
     ) -> Self {
         let RecoveredState {
             block_store,
@@ -171,22 +166,7 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
-            pevm_executor: if public_config.parameters.enable_pevm_executor {
-                Some(PevmExecutor::new(
-                    // [JT]: Sequantial execution for the baseline
-                    ExecutionMode::Sequential,
-                    public_config.parameters.pevm_workload_type.clone(),
-                    private_config
-                        .account_storage_path
-                        .to_str()
-                        .unwrap()
-                        .to_string(),
-                ))
-            } else {
-                None
-            },
-            executed_txns: 0,
-            start_time_point: Instant::now(),
+            ordered_txns_sender,
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -434,44 +414,6 @@ impl<H: BlockHandler> Core<H> {
         }
     }
 
-    // [JT]TODO: this should be made async and consistent with the consensus order
-    pub fn handle_committed_subdag_with_pevm(&mut self, committed: Vec<CommittedSubDag>) {
-        for commit in &committed {
-            for block in &commit.blocks {
-                self.epoch_manager
-                    .observe_committed_block(block, &self.committee);
-                tracing::info!(
-                    "executing block of round {} from replica {}",
-                    block.reference().round,
-                    block.reference().authority
-                );
-                self.execute_block_in_pevm(block.statements());
-            }
-        }
-    }
-
-    pub fn execute_block_in_pevm(&mut self, statements: &[BaseStatement]) {
-        let mut txs = Vec::<(String, Address)>::new();
-        for statement in statements {
-            if let BaseStatement::Share(share) = statement {
-                let (raw_hex, caller) = decode_share_base_statement(share.data());
-                txs.push((raw_hex, caller));
-            }
-        }
-
-        if txs.len() > 0 {
-            tracing::info!("Executing {} transactions in pevm", txs.len());
-            self.executed_txns += txs.len();
-            self.pevm_executor
-                .as_mut()
-                .expect("executor missing")
-                .execute(txs);
-            let elapsed: Duration = self.start_time_point.elapsed();
-            let secs_f64: f64 = elapsed.as_secs_f64();
-            tracing::error!("Throughput = {}", self.executed_txns as f64 / secs_f64);
-        }
-    }
-
     pub fn handle_committed_subdag(
         &mut self,
         committed: Vec<CommittedSubDag>,
@@ -484,6 +426,10 @@ impl<H: BlockHandler> Core<H> {
                     .observe_committed_block(block, &self.committee);
             }
             commit_data.push(CommitData::from(commit));
+
+            self.ordered_txns_sender
+                .try_send(commit.blocks.clone())
+                .expect("Failed to send ordered blocks to executor");
         }
         self.write_state(); // todo - this can be done less frequently to reduce IO
         self.write_commits(&commit_data, state);
@@ -561,33 +507,6 @@ impl<H: BlockHandler> Core<H> {
     pub fn epoch_closing_time(&self) -> Arc<AtomicU64> {
         self.epoch_manager.closing_time()
     }
-}
-
-fn decode_share_base_statement(data: &[u8]) -> (String, Address) {
-    // let parts: Vec<Vec<u8>> = data.split(|&b| b == b'|')
-    //     .map(|chunk| chunk.to_vec())
-    //     .collect();
-
-    // let timestamp = u64::from_le_bytes(parts[0].as_slice().try_into().expect("timestamp must be exactly 8 bytes"));
-    // let raw_hex = String::from_utf8_lossy(&parts[1]).to_string();
-
-    // if let Some(part2) = parts.get(2) {
-    //     println!("part2 length = {}", part2.len());
-    //     println!("part2 bytes  = {:?}", part2);
-    //     println!("part2 as string = {}", String::from_utf8_lossy(part2));
-    // } else {
-    //     println!("part2 does not exist, total parts = {}", parts.len());
-    // }
-
-    // let caller_bytes: [u8; 20] = parts[2].as_slice().try_into().expect("address must be 20 bytes");
-    // let caller = Address::from(caller_bytes);
-
-    // (raw_hex, caller)
-
-    let decoded: TransactionWithHint = bincode::deserialize(&data).unwrap();
-    let raw_hex = decoded.raw_hex;
-    let caller = decoded.caller;
-    (raw_hex, caller)
 }
 
 impl Default for CoreOptions {

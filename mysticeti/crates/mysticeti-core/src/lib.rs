@@ -12,6 +12,7 @@ mod core_thread;
 mod crypto;
 mod data;
 mod epoch_close;
+pub mod executor;
 mod finalization_interpreter;
 #[cfg(test)]
 #[cfg(feature = "simulator")]

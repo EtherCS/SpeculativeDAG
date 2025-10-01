@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use ::prometheus::Registry;
 use eyre::{eyre, Context, Result};
-use pevm::api::{PevmScheduler, PevmTransactionGenerator};
+use pevm::api::{ExecutionMode, PevmExecutor, PevmScheduler, PevmTransactionGenerator};
 
 use crate::{
     block_handler::{RealBlockHandler, TestCommitHandler},
@@ -18,6 +18,7 @@ use crate::{
     committee::Committee,
     config::{ClientParameters, NodePrivateConfig, NodePublicConfig},
     core::{Core, CoreOptions},
+    executor::Executor,
     log::TransactionLog,
     metrics::Metrics,
     net_sync::NetworkSyncer,
@@ -96,6 +97,7 @@ impl Validator {
 
         let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) = mpsc::channel(100);
         let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(100);
+        let (ordered_txns_sender, ordered_txns_receiver) = mpsc::channel(1000);
 
         let mut pevm_transaction_generator = PevmTransactionGenerator::new(
             workload_type.clone(),
@@ -123,6 +125,19 @@ impl Validator {
                 s.run().await;
             })
         };
+
+        let evm_executor = PevmExecutor::new(
+            // [JT]: Sequantial execution for the baseline
+            ExecutionMode::Sequential,
+            public_config.parameters.pevm_workload_type.clone(),
+            private_config
+                .account_storage_path
+                .to_str()
+                .unwrap()
+                .to_string(),
+        );
+
+        Executor::start(evm_executor, ordered_txns_receiver);
 
         TransactionGenerator::start(
             block_sender,
@@ -153,6 +168,7 @@ impl Validator {
             recovered,
             wal_writer,
             CoreOptions::default(),
+            ordered_txns_sender,
         );
         let network = Network::load(
             &public_config,
