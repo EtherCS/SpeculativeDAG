@@ -36,6 +36,7 @@ mod simulated_network;
 mod simulator;
 #[cfg(feature = "simulator")]
 mod simulator_tracing;
+pub mod speculative_executor;
 mod stat;
 mod state;
 mod syncer;
