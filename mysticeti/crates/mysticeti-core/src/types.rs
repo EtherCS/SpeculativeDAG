@@ -34,6 +34,8 @@ use crate::{
     threshold_clock::threshold_clock_valid_non_genesis,
 };
 
+pub use pevm::api::EvmStateWriteSet;
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum Vote {
     Accept,
@@ -633,6 +635,139 @@ impl Transaction {
 impl AsBytes for Transaction {
     fn as_bytes(&self) -> &[u8] {
         &self.data
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum LeaderPredictionStatus {
+    Committed, // Predicted as to-commit
+    Skipped,   // Predicted as to-skip
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum LeaderPredictionType {
+    Predict, // the leader is being predicted
+    Decided, // the leader has been decided
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct LeaderPrediction {
+    pub round: RoundNumber,
+    pub leader_block: Option<Data<StatementBlock>>,
+    pub status: LeaderPredictionStatus,
+    pub predict_type: LeaderPredictionType,
+}
+
+impl LeaderPrediction {
+    pub fn new(
+        round: RoundNumber,
+        leader_block: Option<Data<StatementBlock>>,
+        status: LeaderPredictionStatus,
+        predict_type: LeaderPredictionType,
+    ) -> Self {
+        Self {
+            round,
+            leader_block,
+            status,
+            predict_type,
+        }
+    }
+}
+
+impl fmt::Display for LeaderPrediction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let status_str = match self.status {
+            LeaderPredictionStatus::Committed => "Committed",
+            LeaderPredictionStatus::Skipped => "Skipped",
+        };
+        let type_str = match self.predict_type {
+            LeaderPredictionType::Predict => "Predict",
+            LeaderPredictionType::Decided => "Decided",
+        };
+        write!(
+            f,
+            "LeaderPrediction {{ round: {}, status: {}, type: {} }}",
+            self.round, status_str, type_str
+        )
+    }
+}
+
+/// The definition of adaptive probabilistic speculation tree
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct APSTree {
+    pub start_round: RoundNumber, // The starting round of pending leaders
+    pub pending_leaders: Vec<LeaderPrediction>, // The list of pending leaders
+}
+
+impl APSTree {
+    pub fn new(start_round: RoundNumber) -> Self {
+        Self {
+            start_round,
+            pending_leaders: Vec::new(),
+        }
+    }
+
+    pub fn add_leader_prediction(
+        &mut self,
+        prediction: LeaderPrediction,
+    ) -> Result<(), APSTreeError> {
+        if self.start_round + self.pending_leaders.len() as u64 == prediction.round {
+            self.pending_leaders.push(prediction);
+            Ok(())
+        } else {
+            Err(APSTreeError::InconsecutiveRound)
+        }
+    }
+
+    pub fn update_leader_prediction(
+        &mut self,
+        prediction: LeaderPrediction,
+    ) -> Result<(), APSTreeError> {
+        for leader in &mut self.pending_leaders {
+            if leader.round == prediction.round {
+                *leader = prediction;
+                return Ok(());
+            }
+        }
+        Err(APSTreeError::IncorrectUpdate)
+    }
+
+    /// Extract and remove committed leaders from the pending leaders
+    pub fn get_committed_leaders(&mut self) -> Vec<LeaderPrediction> {
+        // Extract leaders with type Decided, starting from the first leader untiler a Predict type is found
+        let mut committed_leaders = Vec::new();
+        while let Some(leader) = self.pending_leaders.first() {
+            if leader.predict_type == LeaderPredictionType::Decided {
+                committed_leaders.push(leader.clone());
+                self.pending_leaders.remove(0);
+                self.start_round += 1;
+            } else {
+                break;
+            }
+        }
+        committed_leaders
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum APSTreeError {
+    InconsecutiveRound,
+    IncorrectUpdate,
+}
+
+/// The snapshot defines the speculative execution state with a given speculative order
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SpeculativeExecutionSnapshot {
+    pub aps_tree: APSTree,                   // The speculative order
+    pub transition_states: EvmStateWriteSet, // The transition states after executing txs in the order given by aps_tree
+}
+
+impl SpeculativeExecutionSnapshot {
+    pub fn new(aps_tree: APSTree, transition_states: EvmStateWriteSet) -> Self {
+        Self {
+            aps_tree,
+            transition_states,
+        }
     }
 }
 
