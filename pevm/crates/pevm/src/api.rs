@@ -27,7 +27,9 @@ use dashmap::DashMap;
 
 use crate::{erc20::contract::ERC20Token, vm::PevmTxExecutionResult, Pevm};
 
-use revm::primitives::{alloy_primitives::U160, BlockEnv, SpecId, TransactTo, TxEnv, U256};
+use revm::primitives::{
+    alloy_primitives::U160, BlockEnv, EvmState, SpecId, TransactTo, TxEnv, U256,
+};
 
 use ethers::types::Address;
 
@@ -44,6 +46,8 @@ use super::serialization::{deserializer, serializer};
 use crate::{chain::PevmEthereum, Bytecodes, ChainState, EvmAccount, InMemoryStorage};
 
 use serde_json;
+
+pub type EvmStateWriteSet = EvmState;
 
 fn save(storage: &InMemoryStorage, path: &str) -> anyhow::Result<()> {
     let file = File::create(path)?;
@@ -258,6 +262,21 @@ impl PevmExecutor {
             }
         }
         self.storage.update_accounts(state);
+    }
+
+    /// Speculatively execute transactions with a predicted order
+    /// Do not commit the state changes to self.storage yet
+    pub fn speculative_execute(&mut self, txs: Vec<(String, Address)>) -> EvmState {
+        let mut txs = deserializer::decode_batch_hex(txs);
+        tracing::info!("Executed transactions speculatively in a sequential manner");
+        crate::speculative_execute_revm_sequential(
+            &self.chain,
+            &self.storage,
+            SpecId::LATEST,
+            BlockEnv::default(),
+            txs,
+        )
+        // self.update_storage(result.unwrap());
     }
 
     pub fn execute(&mut self, txs: Vec<(String, Address)>) {

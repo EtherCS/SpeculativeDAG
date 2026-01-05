@@ -10,7 +10,7 @@ use alloy_rpc_types_eth::{Block, BlockTransactions};
 use hashbrown::HashMap;
 use revm::{
     db::CacheDB,
-    primitives::{BlockEnv, InvalidTransaction, SpecId, TxEnv},
+    primitives::{BlockEnv, EvmState, InvalidTransaction, SpecId, TxEnv},
     DatabaseCommit,
 };
 
@@ -453,10 +453,9 @@ pub fn execute_revm_sequential<S: Storage, C: PevmChain>(
     let mut evm = build_evm(&mut db, chain, spec_id, block_env, None, true);
     let mut results = Vec::with_capacity(txs.len());
     let mut cumulative_gas_used: u64 = 0;
-    let mut x = 0;
     for tx in txs {
         *evm.tx_mut() = tx;
-        
+
         // TODO: More concrete type for `EVMError<StorageWrapperError<S>>`
         let result_and_state = evm
             .transact()
@@ -474,4 +473,31 @@ pub fn execute_revm_sequential<S: Storage, C: PevmChain>(
         results.push(execution_result);
     }
     Ok(results)
+}
+
+/// Speculatively execute REVM transactions sequentially.
+pub fn speculative_execute_revm_sequential<S: Storage, C: PevmChain>(
+    chain: &C,
+    storage: &S,
+    spec_id: SpecId,
+    block_env: BlockEnv,
+    txs: Vec<TxEnv>,
+) -> EvmState {
+    let mut db = CacheDB::new(StorageWrapper(storage));
+    let mut evm = build_evm(&mut db, chain, spec_id, block_env, None, true);
+    let mut results: EvmState = Default::default();
+    for tx in txs {
+        *evm.tx_mut() = tx;
+
+        let result_and_state = match evm.transact() {
+            Ok(result) => result,
+            Err(_) => break, // todo: return error signal
+        };
+
+        let write_set = result_and_state.state.clone();
+        evm.db_mut().commit(write_set.clone());
+
+        results.extend(write_set);
+    }
+    results
 }

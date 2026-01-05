@@ -214,13 +214,13 @@ macro_rules! index_mutex {
     };
 }
 
-
-
 pub mod chain;
 mod compat;
 mod mv_memory;
 mod pevm;
-pub use pevm::{execute_revm_sequential, Pevm, PevmError, PevmResult};
+pub use pevm::{
+    execute_revm_sequential, speculative_execute_revm_sequential, Pevm, PevmError, PevmResult,
+};
 mod scheduler;
 mod storage;
 pub use storage::{
@@ -231,9 +231,9 @@ mod vm;
 pub use vm::{ExecutionError, PevmTxExecutionResult};
 pub mod api;
 pub use api::{APIError, PevmAPI};
-pub mod serialization;
-pub mod erc20;
 mod common;
+pub mod erc20;
+pub mod serialization;
 
 #[cfg(feature = "rpc-storage")]
 pub use storage::RpcStorage;
