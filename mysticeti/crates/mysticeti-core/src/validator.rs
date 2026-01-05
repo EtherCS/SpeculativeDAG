@@ -18,13 +18,14 @@ use crate::{
     committee::Committee,
     config::{ClientParameters, NodePrivateConfig, NodePublicConfig},
     core::{Core, CoreOptions},
-    executor::Executor,
     log::TransactionLog,
     metrics::Metrics,
     net_sync::NetworkSyncer,
     network::Network,
     prometheus,
     runtime::{JoinError, JoinHandle},
+    // executor::Executor,
+    speculative_executor::SpeculativeExecutor,
     transactions_generator::TransactionGenerator,
     types::AuthorityIndex,
     wal::{self, walf},
@@ -98,6 +99,10 @@ impl Validator {
         let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) = mpsc::channel(100);
         let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(100);
         let (ordered_txns_sender, ordered_txns_receiver) = mpsc::channel(1000);
+        let (speculative_ordered_txns_sender, speculative_ordered_txns_receiver) =
+            mpsc::channel(1000);
+        let (speculative_execution_results_sender, speculative_execution_results_receiver) =
+            mpsc::channel(1000);
 
         let mut pevm_transaction_generator = PevmTransactionGenerator::new(
             workload_type.clone(),
@@ -137,7 +142,13 @@ impl Validator {
                 .to_string(),
         );
 
-        Executor::start(evm_executor, ordered_txns_receiver);
+        // Executor::start(evm_executor, ordered_txns_receiver);
+        SpeculativeExecutor::start(
+            evm_executor,
+            ordered_txns_receiver,
+            speculative_ordered_txns_receiver,
+            speculative_execution_results_sender,
+        );
 
         TransactionGenerator::start(
             block_sender,
@@ -169,6 +180,8 @@ impl Validator {
             wal_writer,
             CoreOptions::default(),
             ordered_txns_sender,
+            speculative_ordered_txns_sender,
+            speculative_execution_results_receiver,
         );
         let network = Network::load(
             &public_config,

@@ -31,7 +31,10 @@ use crate::{
     runtime::timestamp_utc,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
-    types::{AuthorityIndex, BaseStatement, BlockReference, RoundNumber, StatementBlock},
+    types::{
+        APSTree, AuthorityIndex, BaseStatement, BlockReference, EvmStateWriteSet, RoundNumber,
+        SpeculativeExecutionSnapshot, StatementBlock,
+    },
     wal::{WalPosition, WalSyncer, WalWriter},
 };
 
@@ -56,6 +59,14 @@ pub struct Core<H: BlockHandler> {
     committer: UniversalCommitter,
     /// The sender of ordered blocks to executor
     ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
+    /// The sender of speculatively ordered blocks to speculative executor
+    speculative_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
+    /// The receiver of execution results from speculative executor
+    speculative_execution_results_receiver: mpsc::Receiver<EvmStateWriteSet>,
+    /// The current adaptive probabilistic speculation (APS) tree
+    aps_tree: APSTree,
+    /// The set of speculative execution snapshots
+    se_snapshots: HashSet<SpeculativeExecutionSnapshot>,
 }
 
 pub struct CoreOptions {
@@ -81,6 +92,8 @@ impl<H: BlockHandler> Core<H> {
         mut wal_writer: WalWriter,
         options: CoreOptions,
         ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
+        speculative_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
+        speculative_execution_results_receiver: mpsc::Receiver<EvmStateWriteSet>,
     ) -> Self {
         let RecoveredState {
             block_store,
@@ -128,6 +141,9 @@ impl<H: BlockHandler> Core<H> {
             block_handler.recover_state(&state);
         }
 
+        // todo: recover APS tree from WAL
+        let aps_tree = APSTree::new(last_own_block.block.round());
+
         let epoch_manager = EpochManager::new();
 
         let committer =
@@ -167,6 +183,10 @@ impl<H: BlockHandler> Core<H> {
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
             ordered_txns_sender,
+            speculative_txns_sender,
+            speculative_execution_results_receiver,
+            aps_tree,
+            se_snapshots: HashSet::new(),
         };
 
         if !unprocessed_blocks.is_empty() {
