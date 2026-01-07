@@ -29,6 +29,7 @@ pub use test::Dag;
 
 use crate::{
     committee::{Committee, VoteRangeBuilder},
+    consensus::linearizer::CommittedSubDag,
     crypto::{AsBytes, CryptoHash, SignatureBytes, Signer},
     data::Data,
     threshold_clock::threshold_clock_valid_non_genesis,
@@ -791,6 +792,44 @@ impl APSTree {
         }
         committed_leader_blocks
     }
+
+    /// Mark the given committed_leaders (in sub dags' anchor) as to-commit and decided in the aps tree
+    /// For the remaining leaders with round number <= committed_leaders[-1].round, mark them to-skip and decided
+    /// return the number of decided leaders
+    pub fn mark_committed_leaders(&mut self, sub_dags: &Vec<CommittedSubDag>) -> usize {
+        let mut decided_count = 0;
+        let mut committed_rounds = Vec::new();
+        for sub_dag in sub_dags {
+            committed_rounds.push(sub_dag.anchor.round);
+        }
+        let last_committed_round = *committed_rounds.last().unwrap();
+        for leader in &mut self.pending_leaders {
+            if committed_rounds.contains(&leader.round) {
+                leader.status = LeaderPredictionStatus::Committed;
+                leader.predict_type = LeaderPredictionType::Decided;
+            } else if leader.round <= last_committed_round {
+                leader.status = LeaderPredictionStatus::Skipped;
+                leader.predict_type = LeaderPredictionType::Decided;
+            }
+            decided_count += 1;
+        }
+        decided_count
+    }
+
+    /// Get all decided committed leaders until the first non-decided leader
+    pub fn get_consecutive_decided_committed_leaders(&self) -> Vec<Data<StatementBlock>> {
+        let mut decided_committed_leaders = Vec::new();
+        for leader in &self.pending_leaders {
+            if leader.predict_type == LeaderPredictionType::Decided {
+                if leader.status == LeaderPredictionStatus::Committed {
+                    decided_committed_leaders.push(leader.leader_block.clone().unwrap());
+                }
+            } else {
+                break;
+            }
+        }
+        decided_committed_leaders
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -818,15 +857,12 @@ impl fmt::Display for APSTreeError {
 /// The snapshot defines the speculative execution state with a given speculative order
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SpeculativeExecutionSnapshot {
-    pub ordered_leaders: Vec<Data<StatementBlock>>, // The speculative (to-commit) leader order that is specified by leader blocks
+    pub ordered_leaders: Vec<BlockReference>, // The speculative (to-commit) leader order that is specified by leader blocks
     pub transition_states: EvmStateWriteSet, // The transition states after executing txs in the order given by aps_tree
 }
 
 impl SpeculativeExecutionSnapshot {
-    pub fn new(
-        ordered_leaders: Vec<Data<StatementBlock>>,
-        transition_states: EvmStateWriteSet,
-    ) -> Self {
+    pub fn new(ordered_leaders: Vec<BlockReference>, transition_states: EvmStateWriteSet) -> Self {
         Self {
             ordered_leaders,
             transition_states,
