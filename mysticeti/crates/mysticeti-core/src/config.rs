@@ -54,6 +54,14 @@ pub struct NodeParameters {
     pub enable_pevm_executor: bool,
     #[serde(default = "node_defaults::default_pevm_workload_type")]
     pub pevm_workload_type: pevm::api::WorkloadType,
+    #[serde(default = "node_defaults::default_reputation_threshold_deviation")]
+    pub reputation_threshold_deviation: u64,
+    #[serde(default = "node_defaults::default_reputation_threshold_numerator")]
+    pub reputation_threshold_numerator: u64,
+    #[serde(default = "node_defaults::default_reputation_threshold_denominator")]
+    pub reputation_threshold_denominator: u64,
+    #[serde(default = "node_defaults::default_initial_score")]
+    pub initial_score: i128,
 }
 
 pub mod node_defaults {
@@ -100,6 +108,22 @@ pub mod node_defaults {
     pub fn default_pevm_workload_type() -> pevm::api::WorkloadType {
         pevm::api::WorkloadType::ERC20(5, 5, 8)
     }
+
+    pub fn default_reputation_threshold_deviation() -> u64 {
+        40
+    }
+
+    pub fn default_reputation_threshold_numerator() -> u64 {
+        2 // 2f+1
+    }
+
+    pub fn default_reputation_threshold_denominator() -> u64 {
+        3 // 2f+1
+    }
+
+    pub fn default_initial_score() -> i128 {
+        0
+    }
 }
 
 impl Default for NodeParameters {
@@ -116,6 +140,11 @@ impl Default for NodeParameters {
             enable_synchronizer: node_defaults::default_enable_synchronizer(),
             enable_pevm_executor: node_defaults::default_enable_pevm_executor(),
             pevm_workload_type: node_defaults::default_pevm_workload_type(),
+            reputation_threshold_deviation: node_defaults::default_reputation_threshold_deviation(),
+            reputation_threshold_numerator: node_defaults::default_reputation_threshold_numerator(),
+            reputation_threshold_denominator:
+                node_defaults::default_reputation_threshold_denominator(),
+            initial_score: node_defaults::default_initial_score(),
         }
     }
 }

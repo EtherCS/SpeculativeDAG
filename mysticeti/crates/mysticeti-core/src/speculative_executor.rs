@@ -6,6 +6,7 @@ use pevm::api::{PevmExecutor, TransactionWithHint};
 use crate::{
     consensus::linearizer::CommittedSubDag,
     data::Data,
+    node_reputation::NodeReputation,
     runtime::{self},
     types::{
         APSTree, BaseStatement, BlockReference, EvmStateWriteSet, SpeculativeExecutionSnapshot,
@@ -32,12 +33,15 @@ pub struct SpeculativeExecutor {
     pub speculative_message_receiver: mpsc::Receiver<SpeculativeMessage>,
     /// The maintained speculative execution snapshots
     pub snapshots: Vec<SpeculativeExecutionSnapshot>,
+    /// The node reputation tracker
+    pub node_reputation: NodeReputation,
 }
 
 impl SpeculativeExecutor {
     pub fn start(
         pevm_executor: PevmExecutor,
         speculative_message_receiver: mpsc::Receiver<SpeculativeMessage>,
+        node_reputation: NodeReputation,
     ) {
         runtime::Handle::current().spawn(async move {
             // Create an initial empty snapshot as the base state
@@ -51,6 +55,7 @@ impl SpeculativeExecutor {
                 pending_committed_leader_blocks: Vec::new(),
                 speculative_message_receiver,
                 snapshots: vec![initial_snapshot], // Start with base snapshot
+                node_reputation,
             }
             .run()
             .await;

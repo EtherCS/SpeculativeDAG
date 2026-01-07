@@ -23,6 +23,7 @@ mod log;
 pub mod metrics;
 pub mod net_sync;
 pub mod network;
+pub mod node_reputation;
 pub mod prometheus;
 mod range_map;
 mod runtime;

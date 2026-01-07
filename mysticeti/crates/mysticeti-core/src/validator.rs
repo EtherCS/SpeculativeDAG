@@ -22,6 +22,7 @@ use crate::{
     metrics::Metrics,
     net_sync::NetworkSyncer,
     network::Network,
+    node_reputation::NodeReputation,
     prometheus,
     runtime::{JoinError, JoinHandle},
     speculative_executor::SpeculativeExecutor,
@@ -137,8 +138,20 @@ impl Validator {
                 .to_string(),
         );
 
+        let threshold_deviation: u64 = public_config.parameters.reputation_threshold_deviation;
+        let threshold_numerator: u64 = public_config.parameters.reputation_threshold_numerator;
+        let threshold_denominator: u64 = public_config.parameters.reputation_threshold_denominator;
+        let initial_score: i128 = public_config.parameters.initial_score;
+        let node_reputation = NodeReputation::new(
+            committee.clone(),
+            threshold_deviation,
+            threshold_numerator,
+            threshold_denominator,
+            initial_score,
+        );
+
         // Executor::start(evm_executor, ordered_txns_receiver);
-        SpeculativeExecutor::start(evm_executor, speculative_message_receiver);
+        SpeculativeExecutor::start(evm_executor, speculative_message_receiver, node_reputation);
 
         TransactionGenerator::start(
             block_sender,
