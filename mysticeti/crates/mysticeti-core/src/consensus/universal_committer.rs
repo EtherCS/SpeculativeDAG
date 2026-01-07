@@ -9,7 +9,7 @@ use crate::{
     committee::Committee,
     consensus::base_committer::BaseCommitterOptions,
     metrics::Metrics,
-    types::{format_authority_round, AuthorityIndex, BlockReference, RoundNumber},
+    types::{AuthorityIndex, BlockReference, RoundNumber},
 };
 
 /// A universal committer uses a collection of committers to commit a sequence of leaders.
@@ -97,6 +97,17 @@ impl UniversalCommitter {
             .committed_leaders_total
             .with_label_values(&[&authority, &status])
             .inc();
+    }
+
+    pub fn predict_leader_status(&self, leader_round: RoundNumber) -> LeaderStatus {
+        for committer in &self.committers {
+            // Skip committers that don't have a leader for this round.
+            let Some(leader) = committer.elect_leader(leader_round) else {
+                continue;
+            };
+            return committer.predict_leader_status(leader, leader_round);
+        }
+        LeaderStatus::Undecided(0, leader_round)
     }
 }
 

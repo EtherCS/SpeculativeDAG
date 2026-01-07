@@ -259,6 +259,30 @@ impl BaseCommitter {
         false
     }
 
+    /// Check whether the specified leader has enough support for (i.e., 2f+1 connections) prediction
+    /// prediction_round = leader_round + 1
+    fn enough_leader_connection(
+        &self,
+        prediction_round: RoundNumber,
+        leader_block: &Data<StatementBlock>,
+    ) -> bool {
+        let prediction_blocks = self.block_store.get_blocks_by_round(prediction_round);
+
+        let mut connection_stake_aggregator = StakeAggregator::<QuorumThreshold>::new();
+        for prediction_block in &prediction_blocks {
+            let authority = prediction_block.reference().authority;
+            if self.block_store.linked(leader_block, prediction_block) {
+                tracing::trace!(
+                    "[{self}] {prediction_block:?} is a connection for leader {leader_block:?}"
+                );
+                if connection_stake_aggregator.add(authority, &self.committee) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Apply the indirect decision rule to the specified leader to see whether we can indirect-commit
     /// or indirect-skip it.
     #[tracing::instrument(skip_all, fields(leader = %format_authority_round(leader, leader_round)))]
@@ -330,6 +354,28 @@ impl BaseCommitter {
         leaders_with_enough_support
             .pop()
             .unwrap_or_else(|| LeaderStatus::Undecided(leader, leader_round))
+    }
+
+    pub fn predict_leader_status(
+        &self,
+        leader: AuthorityIndex,
+        leader_round: RoundNumber,
+    ) -> LeaderStatus {
+        let leader_blocks = self
+            .block_store
+            .get_blocks_at_authority_round(leader, leader_round);
+        if leader_blocks.is_empty() {
+            return LeaderStatus::Skip(leader, leader_round);
+        } else {
+            let leader_block = &leader_blocks[0];
+            let is_commit = self.enough_leader_connection(leader_round + 1, leader_block);
+            if is_commit {
+                return LeaderStatus::Commit(leader_block.clone());
+            } else {
+                return LeaderStatus::Skip(leader, leader_round);
+            }
+        }
+        LeaderStatus::Undecided(0, leader_round)
     }
 }
 
