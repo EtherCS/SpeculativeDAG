@@ -284,6 +284,16 @@ impl PevmExecutor {
         // self.update_storage(result.unwrap());
     }
 
+    /// Commit the speculative execution results to the storage
+    pub fn commit_speculative_execution(&mut self, evm_state: EvmState) {
+        let mut state = self.storage.accounts_clone();
+        for (addr, acc) in evm_state.iter() {
+            let evm_acc = EvmAccount::from(acc.clone());
+            state.insert(*addr, evm_acc);
+        }
+        self.storage.update_accounts(state);
+    }
+
     pub fn execute(&mut self, txs: Vec<(String, Address)>) {
         let mut txs = deserializer::decode_batch_hex(txs);
 
