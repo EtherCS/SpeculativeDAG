@@ -9,8 +9,8 @@ use crate::{
     node_reputation::NodeReputation,
     runtime::{self},
     types::{
-        APSTree, BaseStatement, BlockReference, EvmStateWriteSet, SpeculativeExecutionSnapshot,
-        StatementBlock,
+        APSTree, BaseStatement, BlockReference, EvmStateWriteSet, LeaderPredictionStatus,
+        SpeculativeExecutionSnapshot, StatementBlock,
     },
 };
 
@@ -75,8 +75,23 @@ impl SpeculativeExecutor {
                                 },
                                 SpeculativeMessageStatus::Consensus => {
                                     tracing::debug!("Received {} consensus ordered blocks to execute", sub_dags.len());
-                                    // todo: update nodes reputations
+
                                     let committed_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
+
+                                    // update node reputations based on the committed leaders and the previous predictions
+                                    let committed_leaders_rounds = committed_leaders.iter().map(|b| b.round).collect::<Vec<u64>>();
+                                    let last_committed_leader_round = committed_leaders_rounds.last().cloned().unwrap_or(0);
+
+                                    for predicted in aps_tree.pending_leaders.iter().take_while(|p| p.round <= last_committed_leader_round) {
+                                        let hit = committed_leaders_rounds.contains(&predicted.round);
+                                        match (predicted.clone().status, hit) {
+                                            (LeaderPredictionStatus::Committed, true) => self.node_reputation.update_score(predicted.author, 1),  // correct
+                                            (LeaderPredictionStatus::Committed, false) => self.node_reputation.update_score(predicted.author, -1), // incorrect
+                                            (LeaderPredictionStatus::Skipped, true) => self.node_reputation.update_score(predicted.author, -1),    // missed
+                                            (LeaderPredictionStatus::Skipped, false) => self.node_reputation.update_score(predicted.author, 1),    // correct skip
+                                        }
+                                    }
+
                                     // Execute the committed blocks
                                     let new_states = self.speculative_execution_on_blocks(&sub_dags).await;
                                     // we can commit the new states as it is derived from consensus order
@@ -120,72 +135,78 @@ impl SpeculativeExecutor {
                 );
 
                 // Extract transactions from the new ordered blocks
-                let mut new_ordered_leaders = vec![];
-                let mut linearlized_new_blocks = vec![];
+                let mut new_ordered_leaders = snapshot.ordered_leaders.clone();
+                let mut new_state = snapshot.transition_states.clone();
                 for sub_dag in sub_dags[snapshot.ordered_leaders.len()..].iter() {
-                    linearlized_new_blocks.extend(sub_dag.blocks.clone());
-                    new_ordered_leaders.push(sub_dag.anchor);
-                }
-
-                let mut txs = Vec::<(String, Address)>::new();
-                for block in &linearlized_new_blocks {
-                    for statement in block.statements() {
-                        if let BaseStatement::Share(share) = statement {
-                            let (raw_hex, caller) = decode_share_base_statement(share.data());
-                            txs.push((raw_hex, caller));
+                    let mut txs = Vec::<(String, Address)>::new();
+                    for block in &sub_dag.blocks {
+                        for statement in block.statements() {
+                            if let BaseStatement::Share(share) = statement {
+                                let (raw_hex, caller) = decode_share_base_statement(share.data());
+                                txs.push((raw_hex, caller));
+                            }
                         }
+                    }
+                    new_state = self
+                        .pevm_executor
+                        .speculative_execute(txs, new_state.clone());
+
+                    new_ordered_leaders.push(sub_dag.anchor);
+                    if self.node_reputation.get_score(sub_dag.anchor.authority)
+                        >= self.node_reputation.threshold_score()
+                    {
+                        tracing::debug!(
+                            "Leader {:?} has high reputation score {}, above threshold {}, take a snapshot",
+                            sub_dag.anchor,
+                            self.node_reputation.get_score(sub_dag.anchor.authority),
+                            self.node_reputation.threshold_score()
+                        );
+                        // we take snapshot after speculative execution if the next leader is likely correct
+                        self.snapshots.push(SpeculativeExecutionSnapshot::new(
+                            new_ordered_leaders.clone(),
+                            new_state.clone(),
+                        ));
                     }
                 }
 
-                // Create new snapshot with combined order
-                new_ordered_leaders.extend(snapshot.ordered_leaders.clone());
-
-                // speculatively execute the new transactions on top of the snapshot state
-                let snapshot_transition_states = snapshot.transition_states.clone();
-                let new_state = self
-                    .pevm_executor
-                    .speculative_execute(txs, snapshot_transition_states);
-
-                // todo: take snapshots based on reputation
-                let new_snapshot =
-                    SpeculativeExecutionSnapshot::new(new_ordered_leaders, new_state.clone());
-
-                // Add the snapshot
-                self.snapshots.push(new_snapshot);
                 return new_state;
             }
             None => {
                 tracing::debug!("No matching snapshot found, re-execute all transactions");
                 // Extract transactions from the new ordered blocks
                 let mut new_ordered_leaders = vec![];
-                let mut linearlized_new_blocks = vec![];
+                let mut new_state = EvmStateWriteSet::default();
                 for sub_dag in sub_dags.iter() {
-                    linearlized_new_blocks.extend(sub_dag.blocks.clone());
-                    new_ordered_leaders.push(sub_dag.anchor);
-                }
-
-                let mut txs = Vec::<(String, Address)>::new();
-                for block in &linearlized_new_blocks {
-                    for statement in block.statements() {
-                        if let BaseStatement::Share(share) = statement {
-                            let (raw_hex, caller) = decode_share_base_statement(share.data());
-                            txs.push((raw_hex, caller));
+                    let mut txs = Vec::<(String, Address)>::new();
+                    for block in &sub_dag.blocks {
+                        for statement in block.statements() {
+                            if let BaseStatement::Share(share) = statement {
+                                let (raw_hex, caller) = decode_share_base_statement(share.data());
+                                txs.push((raw_hex, caller));
+                            }
                         }
                     }
+                    new_state = self
+                        .pevm_executor
+                        .speculative_execute(txs, new_state.clone());
+
+                    new_ordered_leaders.push(sub_dag.anchor);
+                    if self.node_reputation.get_score(sub_dag.anchor.authority)
+                        >= self.node_reputation.threshold_score()
+                    {
+                        tracing::debug!(
+                            "Leader {:?} has high reputation score {}, above threshold {}, take a snapshot",
+                            sub_dag.anchor,
+                            self.node_reputation.get_score(sub_dag.anchor.authority),
+                            self.node_reputation.threshold_score()
+                        );
+                        // we take snapshot after speculative execution if the next leader is likely correct
+                        self.snapshots.push(SpeculativeExecutionSnapshot::new(
+                            new_ordered_leaders.clone(),
+                            new_state.clone(),
+                        ));
+                    }
                 }
-
-                // execute the new transactions on top of the snapshot state
-                let snapshot_transition_states = EvmStateWriteSet::default();
-                let new_state = self
-                    .pevm_executor
-                    .speculative_execute(txs, snapshot_transition_states);
-
-                // todo: take snapshots based on reputation
-                let new_snapshot =
-                    SpeculativeExecutionSnapshot::new(new_ordered_leaders, new_state.clone());
-
-                // Add the snapshot
-                self.snapshots.push(new_snapshot);
 
                 return new_state;
             }
