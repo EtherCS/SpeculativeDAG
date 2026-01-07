@@ -654,6 +654,7 @@ pub enum LeaderPredictionType {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct LeaderPrediction {
     pub round: RoundNumber,
+    pub author: AuthorityIndex, // the expected creator of the leader block at round
     pub leader_block: Option<Data<StatementBlock>>,
     pub status: LeaderPredictionStatus,
     pub predict_type: LeaderPredictionType,
@@ -662,12 +663,14 @@ pub struct LeaderPrediction {
 impl LeaderPrediction {
     pub fn new(
         round: RoundNumber,
+        author: AuthorityIndex,
         leader_block: Option<Data<StatementBlock>>,
         status: LeaderPredictionStatus,
         predict_type: LeaderPredictionType,
     ) -> Self {
         Self {
             round,
+            author,
             leader_block,
             status,
             predict_type,
@@ -687,8 +690,8 @@ impl fmt::Display for LeaderPrediction {
         };
         write!(
             f,
-            "LeaderPrediction {{ round: {}, status: {}, type: {} }}",
-            self.round, status_str, type_str
+            "LeaderPrediction {{ round: {}, author: {}, status: {}, type: {} }}",
+            self.round, self.author, status_str, type_str
         )
     }
 }

@@ -408,12 +408,14 @@ impl<H: BlockHandler> Core<H> {
             let leader_prediction = match leader_status {
                 LeaderStatus::Commit(leader_block) => LeaderPrediction::new(
                     r,
+                    leader_block.author(),
                     Some(leader_block),
                     LeaderPredictionStatus::Committed,
                     LeaderPredictionType::Predict,
                 ),
-                LeaderStatus::Skip(_, _) => LeaderPrediction::new(
+                LeaderStatus::Skip(author, _) => LeaderPrediction::new(
                     r,
+                    author,
                     None,
                     LeaderPredictionStatus::Skipped,
                     LeaderPredictionType::Predict,
