@@ -482,8 +482,11 @@ pub fn speculative_execute_revm_sequential<S: Storage, C: PevmChain>(
     spec_id: SpecId,
     block_env: BlockEnv,
     txs: Vec<TxEnv>,
+    speculative_states: EvmState,
 ) -> EvmState {
     let mut db = CacheDB::new(StorageWrapper(storage));
+    // Apply speculative states to the cache database for execution
+    db.commit(speculative_states);
     let mut evm = build_evm(&mut db, chain, spec_id, block_env, None, true);
     let mut results: EvmState = Default::default();
     for tx in txs {

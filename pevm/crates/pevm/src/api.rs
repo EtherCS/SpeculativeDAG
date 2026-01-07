@@ -266,7 +266,11 @@ impl PevmExecutor {
 
     /// Speculatively execute transactions with a predicted order
     /// Do not commit the state changes to self.storage yet
-    pub fn speculative_execute(&mut self, txs: Vec<(String, Address)>) -> EvmState {
+    pub fn speculative_execute(
+        &mut self,
+        txs: Vec<(String, Address)>,
+        speculative_states: EvmState,
+    ) -> EvmState {
         let mut txs = deserializer::decode_batch_hex(txs);
         tracing::info!("Executed transactions speculatively in a sequential manner");
         crate::speculative_execute_revm_sequential(
@@ -275,6 +279,7 @@ impl PevmExecutor {
             SpecId::LATEST,
             BlockEnv::default(),
             txs,
+            speculative_states,
         )
         // self.update_storage(result.unwrap());
     }
