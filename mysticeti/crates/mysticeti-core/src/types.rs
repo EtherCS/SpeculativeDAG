@@ -707,16 +707,22 @@ impl APSTree {
         }
     }
 
-    pub fn add_leader_prediction(
+    pub fn add_leader_predictions(
         &mut self,
-        prediction: LeaderPrediction,
+        predictions: Vec<LeaderPrediction>,
     ) -> Result<(), APSTreeError> {
-        if self.start_round + self.pending_leaders.len() as u64 == prediction.round {
-            self.pending_leaders.push(prediction);
-            Ok(())
-        } else {
-            Err(APSTreeError::InconsecutiveRound)
+        for pre in predictions {
+            if self.start_round + self.pending_leaders.len() as u64 == pre.round {
+                self.pending_leaders.push(pre);
+            } else {
+                return Err(APSTreeError::InconsecutiveRound);
+            }
         }
+        Ok(())
+    }
+
+    pub fn last_predicted_round(&self) -> RoundNumber {
+        self.start_round + self.pending_leaders.len() as RoundNumber - 1
     }
 
     pub fn update_leader_prediction(
@@ -747,6 +753,44 @@ impl APSTree {
         }
         committed_leaders
     }
+
+    /// Extract leaders that are predicted as committed up to a given round
+    pub fn get_predict_committed_leader_blocks_up_to_round(
+        &self,
+        round: RoundNumber,
+    ) -> Vec<Data<StatementBlock>> {
+        let mut committed_leader_blocks = Vec::new();
+        for leader in &self.pending_leaders {
+            if leader.round > round {
+                break;
+            }
+            if leader.status == LeaderPredictionStatus::Committed {
+                if let Some(leader_block) = &leader.leader_block {
+                    committed_leader_blocks.push(leader_block.clone());
+                }
+            }
+        }
+        committed_leader_blocks
+    }
+
+    /// Extract leaders that are predicted as committed since a given round
+    pub fn get_predict_committed_leader_blocks_since_round(
+        &self,
+        round: RoundNumber,
+    ) -> Vec<Data<StatementBlock>> {
+        let mut committed_leader_blocks = Vec::new();
+        for leader in &self.pending_leaders {
+            if leader.round < round {
+                continue;
+            }
+            if leader.status == LeaderPredictionStatus::Committed {
+                if let Some(leader_block) = &leader.leader_block {
+                    committed_leader_blocks.push(leader_block.clone());
+                }
+            }
+        }
+        committed_leader_blocks
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -755,17 +799,36 @@ pub enum APSTreeError {
     IncorrectUpdate,
 }
 
+impl fmt::Display for APSTreeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            APSTreeError::InconsecutiveRound => {
+                write!(f, "The round of the leader prediction is not consecutive")
+            }
+            APSTreeError::IncorrectUpdate => {
+                write!(
+                    f,
+                    "The round of the leader prediction to update is not found"
+                )
+            }
+        }
+    }
+}
+
 /// The snapshot defines the speculative execution state with a given speculative order
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SpeculativeExecutionSnapshot {
-    pub aps_tree: APSTree,                   // The speculative order
+    pub ordered_leaders: Vec<Data<StatementBlock>>, // The speculative (to-commit) leader order that is specified by leader blocks
     pub transition_states: EvmStateWriteSet, // The transition states after executing txs in the order given by aps_tree
 }
 
 impl SpeculativeExecutionSnapshot {
-    pub fn new(aps_tree: APSTree, transition_states: EvmStateWriteSet) -> Self {
+    pub fn new(
+        ordered_leaders: Vec<Data<StatementBlock>>,
+        transition_states: EvmStateWriteSet,
+    ) -> Self {
         Self {
-            aps_tree,
+            ordered_leaders,
             transition_states,
         }
     }

@@ -21,19 +21,22 @@ use crate::{
     committee::Committee,
     config::{NodePrivateConfig, NodePublicConfig},
     consensus::{
-        linearizer::CommittedSubDag,
+        linearizer::{CommittedSubDag, Linearizer},
         universal_committer::{UniversalCommitter, UniversalCommitterBuilder},
+        LeaderStatus,
     },
     crypto::Signer,
     data::Data,
     epoch_close::EpochManager,
     metrics::{Metrics, UtilizationTimerVecExt},
     runtime::timestamp_utc,
+    speculative_executor::SpeculativeMessage,
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
     types::{
-        APSTree, AuthorityIndex, BaseStatement, BlockReference, EvmStateWriteSet, RoundNumber,
-        SpeculativeExecutionSnapshot, StatementBlock,
+        APSTree, AuthorityIndex, BaseStatement, BlockReference, EvmStateWriteSet, LeaderPrediction,
+        LeaderPredictionStatus, LeaderPredictionType, RoundNumber, SpeculativeExecutionSnapshot,
+        StatementBlock,
     },
     wal::{WalPosition, WalSyncer, WalWriter},
 };
@@ -57,16 +60,12 @@ pub struct Core<H: BlockHandler> {
     epoch_manager: EpochManager,
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
-    /// The sender of ordered blocks to executor
-    ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
-    /// The sender of speculatively ordered blocks to speculative executor
-    speculative_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
-    /// The receiver of execution results from speculative executor
-    speculative_execution_results_receiver: mpsc::Receiver<EvmStateWriteSet>,
+    /// The sender to send speculative messages to speculative executor
+    speculative_message_sender: mpsc::Sender<SpeculativeMessage>,
     /// The current adaptive probabilistic speculation (APS) tree
     aps_tree: APSTree,
-    /// The set of speculative execution snapshots
-    se_snapshots: HashSet<SpeculativeExecutionSnapshot>,
+    /// The last leader round that is speculatively committed (to-commit)
+    last_speculative_commit_round: RoundNumber,
 }
 
 pub struct CoreOptions {
@@ -91,9 +90,7 @@ impl<H: BlockHandler> Core<H> {
         recovered: RecoveredState,
         mut wal_writer: WalWriter,
         options: CoreOptions,
-        ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
-        speculative_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
-        speculative_execution_results_receiver: mpsc::Receiver<EvmStateWriteSet>,
+        speculative_message_sender: mpsc::Sender<SpeculativeMessage>,
     ) -> Self {
         let RecoveredState {
             block_store,
@@ -143,6 +140,13 @@ impl<H: BlockHandler> Core<H> {
 
         // todo: recover APS tree from WAL
         let aps_tree = APSTree::new(last_own_block.block.round());
+        let last_speculative_commit_round = aps_tree
+            .pending_leaders
+            .iter()
+            .rev()
+            .find(|p| p.status == LeaderPredictionStatus::Committed)
+            .map(|p| p.round)
+            .unwrap_or(0 as RoundNumber);
 
         let epoch_manager = EpochManager::new();
 
@@ -182,11 +186,9 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
-            ordered_txns_sender,
-            speculative_txns_sender,
-            speculative_execution_results_receiver,
+            speculative_message_sender,
             aps_tree,
-            se_snapshots: HashSet::new(),
+            last_speculative_commit_round,
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -252,6 +254,48 @@ impl<H: BlockHandler> Core<H> {
         let clock_round = self.threshold_clock.get_round();
         if clock_round <= self.last_proposed() {
             return None;
+        }
+        // upon entering a new round, do speculative execution
+        if clock_round >= 2 {
+            let new_leader_predictions =
+                self.update_aps_tree(clock_round - 2, self.aps_tree.last_predicted_round());
+            match self
+                .aps_tree
+                .add_leader_predictions(new_leader_predictions.clone())
+            {
+                Ok(_speculative_executions) => {
+                    // linearlizer is used to collect committed sub-dags from speculative ordered leader blocks
+                    let mut linearlizer = Linearizer::new();
+                    let speculative_leaders: Vec<Data<StatementBlock>> = new_leader_predictions
+                        .iter()
+                        .filter(|p| {
+                            p.status == LeaderPredictionStatus::Committed && p.leader_block != None
+                        })
+                        .filter_map(|p| p.leader_block.clone())
+                        .collect();
+                    let speculative_subdags =
+                        linearlizer.handle_commit(&self.block_store, speculative_leaders.clone());
+                    let mut speculative_linear_blocks = vec![];
+                    for subdag in &speculative_subdags {
+                        speculative_linear_blocks.extend(subdag.blocks.clone());
+                    }
+                    // we send the speculatively ordered blocks to the speculative executor for execution
+                    self.speculative_message_sender
+                        .try_send(SpeculativeMessage::SpeculativeExecuteTxs(
+                            self.aps_tree.clone(),
+                            self.last_speculative_commit_round,
+                            speculative_linear_blocks,
+                        ))
+                        .expect(
+                            "Failed to send speculative ordered blocks to speculative executor",
+                        );
+                    self.last_speculative_commit_round =
+                        speculative_leaders.last().unwrap().round();
+                }
+                Err(e) => {
+                    tracing::error!("Failed to add leader predictions to APS tree: {}", e);
+                }
+            }
         }
 
         let mut includes = vec![];
@@ -354,6 +398,39 @@ impl<H: BlockHandler> Core<H> {
         Some(block)
     }
 
+    /// This function updates the APS tree by predicting an order from start_round to last_predicted_round
+    /// start_round: the latest round of the predicted leader block
+    /// last_predicted_round: the round that we last predicted
+    fn update_aps_tree(
+        &mut self,
+        start_round: RoundNumber,
+        last_predicted_round: RoundNumber,
+    ) -> Vec<LeaderPrediction> {
+        let mut new_predicted_leaders = Vec::new();
+        for r in last_predicted_round + 1..=start_round {
+            let leader_status = self.committer.predict_leader_status(r);
+            let leader_prediction = match leader_status {
+                LeaderStatus::Commit(leader_block) => LeaderPrediction::new(
+                    r,
+                    Some(leader_block),
+                    LeaderPredictionStatus::Committed,
+                    LeaderPredictionType::Predict,
+                ),
+                LeaderStatus::Skip(_, _) => LeaderPrediction::new(
+                    r,
+                    None,
+                    LeaderPredictionStatus::Skipped,
+                    LeaderPredictionType::Predict,
+                ),
+                LeaderStatus::Undecided(_, _) => {
+                    panic!("Error: not ready to predict round {}", r);
+                }
+            };
+            new_predicted_leaders.push(leader_prediction);
+        }
+        new_predicted_leaders
+    }
+
     pub fn wal_syncer(&self) -> WalSyncer {
         self.wal_writer
             .syncer()
@@ -395,6 +472,11 @@ impl<H: BlockHandler> Core<H> {
         if self.last_commit_leader.round() > self.rounds_in_epoch {
             self.epoch_manager.epoch_change_begun();
         }
+
+        // send the new committed leader blocks to speculative executor
+        self.speculative_message_sender
+            .try_send(SpeculativeMessage::CommitLeaders(sequence.clone()))
+            .expect("Failed to send committed ordered blocks to speculative executor");
 
         sequence
     }
@@ -447,9 +529,10 @@ impl<H: BlockHandler> Core<H> {
             }
             commit_data.push(CommitData::from(commit));
 
-            self.ordered_txns_sender
-                .try_send(commit.blocks.clone())
-                .expect("Failed to send ordered blocks to executor");
+            // todo: we need to check if the consensus order is consistent with the speculative order
+            // self.ordered_txns_sender
+            //     .try_send(commit.blocks.clone())
+            //     .expect("Failed to send ordered blocks to executor");
         }
         self.write_state(); // todo - this can be done less frequently to reduce IO
         self.write_commits(&commit_data, state);

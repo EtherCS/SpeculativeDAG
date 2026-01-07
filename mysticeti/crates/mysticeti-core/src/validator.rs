@@ -24,7 +24,6 @@ use crate::{
     network::Network,
     prometheus,
     runtime::{JoinError, JoinHandle},
-    // executor::Executor,
     speculative_executor::SpeculativeExecutor,
     transactions_generator::TransactionGenerator,
     types::AuthorityIndex,
@@ -98,11 +97,7 @@ impl Validator {
 
         let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) = mpsc::channel(100);
         let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(100);
-        let (ordered_txns_sender, ordered_txns_receiver) = mpsc::channel(1000);
-        let (speculative_ordered_txns_sender, speculative_ordered_txns_receiver) =
-            mpsc::channel(1000);
-        let (speculative_execution_results_sender, speculative_execution_results_receiver) =
-            mpsc::channel(1000);
+        let (speculative_message_sender, speculative_message_receiver) = mpsc::channel(1000);
 
         let mut pevm_transaction_generator = PevmTransactionGenerator::new(
             workload_type.clone(),
@@ -143,12 +138,7 @@ impl Validator {
         );
 
         // Executor::start(evm_executor, ordered_txns_receiver);
-        SpeculativeExecutor::start(
-            evm_executor,
-            ordered_txns_receiver,
-            speculative_ordered_txns_receiver,
-            speculative_execution_results_sender,
-        );
+        SpeculativeExecutor::start(evm_executor, speculative_message_receiver);
 
         TransactionGenerator::start(
             block_sender,
@@ -179,9 +169,7 @@ impl Validator {
             recovered,
             wal_writer,
             CoreOptions::default(),
-            ordered_txns_sender,
-            speculative_ordered_txns_sender,
-            speculative_execution_results_receiver,
+            speculative_message_sender,
         );
         let network = Network::load(
             &public_config,
