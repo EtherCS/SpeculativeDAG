@@ -30,13 +30,12 @@ use crate::{
     epoch_close::EpochManager,
     metrics::{Metrics, UtilizationTimerVecExt},
     runtime::timestamp_utc,
-    speculative_executor::SpeculativeMessage,
+    speculative_executor::{SpeculativeMessage, SpeculativeMessageStatus},
     state::RecoveredState,
     threshold_clock::ThresholdClockAggregator,
     types::{
-        APSTree, AuthorityIndex, BaseStatement, BlockReference, EvmStateWriteSet, LeaderPrediction,
-        LeaderPredictionStatus, LeaderPredictionType, RoundNumber, SpeculativeExecutionSnapshot,
-        StatementBlock,
+        APSTree, AuthorityIndex, BaseStatement, BlockReference, LeaderPrediction,
+        LeaderPredictionStatus, LeaderPredictionType, RoundNumber, StatementBlock,
     },
     wal::{WalPosition, WalSyncer, WalWriter},
 };
@@ -64,8 +63,12 @@ pub struct Core<H: BlockHandler> {
     speculative_message_sender: mpsc::Sender<SpeculativeMessage>,
     /// The current adaptive probabilistic speculation (APS) tree
     aps_tree: APSTree,
-    /// The last leader round that is speculatively committed (to-commit)
-    last_speculative_commit_round: RoundNumber,
+    /// The sub dags corresponding to the current aps_tree
+    aps_tree_sub_dags: Vec<CommittedSubDag>,
+    /// Consensusu linearizer: used to help recovery
+    consensus_linearizer: Linearizer,
+    /// Speculative linearizer: used to trace the speculative committed blocks
+    speculative_linearizer: Linearizer,
 }
 
 pub struct CoreOptions {
@@ -138,15 +141,10 @@ impl<H: BlockHandler> Core<H> {
             block_handler.recover_state(&state);
         }
 
-        // todo: recover APS tree from WAL
+        // todo: recover APS tree and liearizers from WAL
         let aps_tree = APSTree::new(last_own_block.block.round());
-        let last_speculative_commit_round = aps_tree
-            .pending_leaders
-            .iter()
-            .rev()
-            .find(|p| p.status == LeaderPredictionStatus::Committed)
-            .map(|p| p.round)
-            .unwrap_or(0 as RoundNumber);
+        let consensus_linearizer = Linearizer::new();
+        let speculative_linearizer = Linearizer::new();
 
         let epoch_manager = EpochManager::new();
 
@@ -188,7 +186,9 @@ impl<H: BlockHandler> Core<H> {
             committer,
             speculative_message_sender,
             aps_tree,
-            last_speculative_commit_round,
+            aps_tree_sub_dags: Vec::new(),
+            consensus_linearizer,
+            speculative_linearizer,
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -258,39 +258,35 @@ impl<H: BlockHandler> Core<H> {
         // upon entering a new round, do speculative execution
         if clock_round >= 2 {
             let new_leader_predictions =
-                self.update_aps_tree(clock_round - 2, self.aps_tree.last_predicted_round());
+                self.add_leaders_to_aps_tree(clock_round - 2, self.aps_tree.last_predicted_round());
             match self
                 .aps_tree
                 .add_leader_predictions(new_leader_predictions.clone())
             {
                 Ok(_speculative_executions) => {
                     // linearlizer is used to collect committed sub-dags from speculative ordered leader blocks
-                    let mut linearlizer = Linearizer::new();
                     let speculative_leaders: Vec<Data<StatementBlock>> = new_leader_predictions
                         .iter()
                         .filter(|p| {
-                            p.status == LeaderPredictionStatus::Committed && p.leader_block != None
+                            p.status == LeaderPredictionStatus::Committed
+                                && p.leader_block.is_some()
                         })
                         .filter_map(|p| p.leader_block.clone())
                         .collect();
-                    let speculative_subdags =
-                        linearlizer.handle_commit(&self.block_store, speculative_leaders.clone());
-                    let mut speculative_linear_blocks = vec![];
-                    for subdag in &speculative_subdags {
-                        speculative_linear_blocks.extend(subdag.blocks.clone());
-                    }
+                    let speculative_subdags = self
+                        .speculative_linearizer
+                        .handle_commit(&self.block_store, speculative_leaders.clone());
+                    self.aps_tree_sub_dags.extend(speculative_subdags);
                     // we send the speculatively ordered blocks to the speculative executor for execution
                     self.speculative_message_sender
                         .try_send(SpeculativeMessage::SpeculativeExecuteTxs(
                             self.aps_tree.clone(),
-                            self.last_speculative_commit_round,
-                            speculative_linear_blocks,
+                            self.aps_tree_sub_dags.clone(),
+                            SpeculativeMessageStatus::Speculative,
                         ))
                         .expect(
                             "Failed to send speculative ordered blocks to speculative executor",
                         );
-                    self.last_speculative_commit_round =
-                        speculative_leaders.last().unwrap().round();
                 }
                 Err(e) => {
                     tracing::error!("Failed to add leader predictions to APS tree: {}", e);
@@ -401,7 +397,7 @@ impl<H: BlockHandler> Core<H> {
     /// This function updates the APS tree by predicting an order from start_round to last_predicted_round
     /// start_round: the latest round of the predicted leader block
     /// last_predicted_round: the round that we last predicted
-    fn update_aps_tree(
+    fn add_leaders_to_aps_tree(
         &mut self,
         start_round: RoundNumber,
         last_predicted_round: RoundNumber,
@@ -473,11 +469,6 @@ impl<H: BlockHandler> Core<H> {
             self.epoch_manager.epoch_change_begun();
         }
 
-        // send the new committed leader blocks to speculative executor
-        self.speculative_message_sender
-            .try_send(SpeculativeMessage::CommitLeaders(sequence.clone()))
-            .expect("Failed to send committed ordered blocks to speculative executor");
-
         sequence
     }
 
@@ -521,24 +512,97 @@ impl<H: BlockHandler> Core<H> {
         committed: Vec<CommittedSubDag>,
         state: &Bytes,
     ) -> Vec<CommitData> {
+        let (consistent_committed_leader_num, decided_leader_num) =
+            self.check_speculative_consensus_consistency(&committed);
+        // send the final consensus order to speculative executor for commitment
+        self.speculative_message_sender
+            .try_send(SpeculativeMessage::SpeculativeExecuteTxs(
+                self.aps_tree.clone(),
+                committed.clone(),
+                SpeculativeMessageStatus::Consensus,
+            ))
+            .expect("Failed to send committed ordered blocks to speculative executor");
+
+        // update consensus linearizer and epoch manager
         let mut commit_data = vec![];
         for commit in &committed {
             for block in &commit.blocks {
                 self.epoch_manager
                     .observe_committed_block(block, &self.committee);
+
+                self.consensus_linearizer
+                    .committed
+                    .insert(*block.reference());
             }
             commit_data.push(CommitData::from(commit));
-
-            // todo: we need to check if the consensus order is consistent with the speculative order
-            // self.ordered_txns_sender
-            //     .try_send(commit.blocks.clone())
-            //     .expect("Failed to send ordered blocks to executor");
         }
         self.write_state(); // todo - this can be done less frequently to reduce IO
         self.write_commits(&commit_data, state);
         // todo - We should also persist state of the epoch manager, otherwise if validator
         // restarts during epoch change it will fork on the epoch change state.
+
+        // update APS tree and its corresponding sub dags
+        self.aps_tree.start_round += decided_leader_num as RoundNumber;
+        self.aps_tree_sub_dags.drain(0..decided_leader_num);
+        if consistent_committed_leader_num == committed.len() {
+            tracing::debug!(
+                "Happy path: speculative APS tree is consistent with consensus committed order",
+            );
+            self.aps_tree_sub_dags
+                .drain(0..consistent_committed_leader_num);
+        } else {
+            tracing::debug!(
+                "Fallback path: speculative APS tree is inconsistent with consensus committed order",
+            );
+            self.speculative_linearizer.committed = self.consensus_linearizer.committed.clone();
+            self.aps_tree_sub_dags.clear();
+            // rebuild sub dags with the new aps tree
+            let remaining_predicted_committed_leaders = self
+                .aps_tree
+                .get_predict_committed_leader_blocks_since_round(self.aps_tree.start_round);
+            self.aps_tree_sub_dags = self.speculative_linearizer.handle_commit(
+                &self.block_store,
+                remaining_predicted_committed_leaders.clone(),
+            );
+        }
+
         commit_data
+    }
+
+    /// check whether the speculative APS tree is consistent with the consensus committed order
+    /// return (consistent_committed_leader_num, decided_leader_num)
+    /// if consistent_committed_leader_num is less than committed.len(), then it means there is inconsistency
+    fn check_speculative_consensus_consistency(
+        &self,
+        committed: &Vec<CommittedSubDag>,
+    ) -> (usize, usize) {
+        if committed.is_empty() {
+            panic!("Committed sub dags is empty");
+        }
+        let first_committed_round = committed.first().unwrap().anchor.round;
+        if self.aps_tree.start_round > first_committed_round {
+            panic!("Inconsistent APS tree start round");
+        }
+
+        let last_committed_round = committed.last().unwrap().anchor.round;
+        let predict_start_round = self.aps_tree.start_round;
+        let mut consistent_committed_leader_num = 0;
+        let mut decided_leader_num = 0;
+        let mut committed_leaders = vec![];
+        for sub_dag in committed {
+            committed_leaders.push(sub_dag.anchor);
+        }
+        for leader_prediction in self
+            .aps_tree
+            .get_predict_committed_leader_blocks_up_to_round(last_committed_round)
+        {
+            if *leader_prediction.reference() != committed_leaders.remove(0) {
+                // the speculative order is inconsistent with the consensus order
+            }
+            consistent_committed_leader_num += 1;
+            decided_leader_num = (leader_prediction.round() - predict_start_round + 1) as usize;
+        }
+        (consistent_committed_leader_num, decided_leader_num)
     }
 
     pub fn write_state(&mut self) {
