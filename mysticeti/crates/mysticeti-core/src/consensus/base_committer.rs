@@ -260,20 +260,21 @@ impl BaseCommitter {
     }
 
     /// Check whether the specified leader has enough support for (i.e., 2f+1 connections) prediction
-    /// prediction_round = leader_round + 1
+    /// voting_round = leader_round + 1
     fn enough_leader_connection(
         &self,
-        prediction_round: RoundNumber,
+        voting_round: RoundNumber,
         leader_block: &Data<StatementBlock>,
     ) -> bool {
-        let prediction_blocks = self.block_store.get_blocks_by_round(prediction_round);
+        let voting_blocks = self.block_store.get_blocks_by_round(voting_round);
+        let leader_ref = leader_block.reference();
 
         let mut connection_stake_aggregator = StakeAggregator::<QuorumThreshold>::new();
-        for prediction_block in &prediction_blocks {
-            let authority = prediction_block.reference().authority;
-            if self.block_store.linked(leader_block, prediction_block) {
+        for voting_block in &voting_blocks {
+            let authority = voting_block.reference().authority;
+            if voting_block.includes().contains(leader_ref) {
                 tracing::trace!(
-                    "[{self}] {prediction_block:?} is a connection for leader {leader_block:?}"
+                    "[{self}] {voting_block:?} is a connection for leader {leader_block:?}"
                 );
                 if connection_stake_aggregator.add(authority, &self.committee) {
                     return true;
@@ -375,7 +376,6 @@ impl BaseCommitter {
                 return LeaderStatus::Skip(leader, leader_round);
             }
         }
-        LeaderStatus::Undecided(0, leader_round)
     }
 }
 
