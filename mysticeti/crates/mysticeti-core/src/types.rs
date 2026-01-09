@@ -725,6 +725,8 @@ impl APSTree {
         Ok(())
     }
 
+    /// Get the last predicted round number
+    /// note: self.start_round is initialized >= 1
     pub fn last_predicted_round(&self) -> RoundNumber {
         self.start_round + self.pending_leaders.len() as RoundNumber - 1
     }
@@ -740,22 +742,6 @@ impl APSTree {
             }
         }
         Err(APSTreeError::IncorrectUpdate)
-    }
-
-    /// Extract and remove committed leaders from the pending leaders
-    pub fn get_committed_leaders(&mut self) -> Vec<LeaderPrediction> {
-        // Extract leaders with type Decided, starting from the first leader untiler a Predict type is found
-        let mut committed_leaders = Vec::new();
-        while let Some(leader) = self.pending_leaders.first() {
-            if leader.predict_type == LeaderPredictionType::Decided {
-                committed_leaders.push(leader.clone());
-                self.pending_leaders.remove(0);
-                self.start_round += 1;
-            } else {
-                break;
-            }
-        }
-        committed_leaders
     }
 
     /// Extract leaders that are predicted as committed up to a given round

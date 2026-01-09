@@ -86,7 +86,7 @@ pub mod node_defaults {
     }
 
     pub fn default_number_of_leaders() -> usize {
-        2
+        1
     }
 
     pub fn default_enable_pipelining() -> bool {
@@ -110,7 +110,7 @@ pub mod node_defaults {
     }
 
     pub fn default_reputation_threshold_deviation() -> u64 {
-        40
+        80
     }
 
     pub fn default_reputation_threshold_numerator() -> u64 {
