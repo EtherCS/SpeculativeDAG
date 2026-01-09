@@ -74,7 +74,7 @@ impl SpeculativeExecutor {
                                     self.speculative_execution_on_blocks(&sub_dags).await;
                                 },
                                 SpeculativeMessageStatus::Consensus => {
-                                    tracing::debug!("Received {} consensus ordered blocks to execute", sub_dags.len());
+                                    tracing::debug!("Received {} consensus ordered blocks {:?} to execute", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
 
                                     let committed_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
 
@@ -216,7 +216,6 @@ impl SpeculativeExecutor {
     /// Find the snapshot with the longest common prefix matching the given leaders
     fn find_best_matching_snapshot(
         &self,
-        // target_leaders: &[Data<StatementBlock>],
         sub_dags: &Vec<CommittedSubDag>,
     ) -> Option<&SpeculativeExecutionSnapshot> {
         let mut best_match: Option<&SpeculativeExecutionSnapshot> = None;
@@ -230,13 +229,11 @@ impl SpeculativeExecutor {
             let common_prefix_len =
                 common_prefix_length(&snapshot.ordered_leaders, &target_leaders);
 
-            if common_prefix_len == target_leaders.len() {
+            if common_prefix_len == target_leaders.len() && common_prefix_len == snapshot.ordered_leaders.len() {
                 // Perfect match
                 return Some(snapshot);
             }
-            // The snapshot must be a complete prefix of target_leaders
-            if common_prefix_len == snapshot.ordered_leaders.len()
-                && common_prefix_len > best_match_length
+            if common_prefix_len > best_match_length
             {
                 best_match = Some(snapshot);
                 best_match_length = common_prefix_len;
