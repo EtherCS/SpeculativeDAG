@@ -142,7 +142,12 @@ impl<H: BlockHandler> Core<H> {
         }
 
         // todo: recover APS tree and liearizers from WAL
-        let aps_tree = APSTree::new(last_own_block.block.round());
+        let aps_tree_start_round = if last_own_block.block.round() > 0 {
+            last_own_block.block.round()
+        } else {
+            1
+        };
+        let aps_tree = APSTree::new(aps_tree_start_round);
         let consensus_linearizer = Linearizer::new();
         let speculative_linearizer = Linearizer::new();
 
@@ -256,7 +261,8 @@ impl<H: BlockHandler> Core<H> {
             return None;
         }
         // upon entering a new round, do speculative execution
-        if clock_round >= 2 {
+        // we assume round 1 is the first round that can be committed (todo: make it configurable)
+        if clock_round > 2 {
             let new_leader_predictions =
                 self.add_leaders_to_aps_tree(clock_round - 2, self.aps_tree.last_predicted_round());
             match self
@@ -273,6 +279,7 @@ impl<H: BlockHandler> Core<H> {
                         })
                         .filter_map(|p| p.leader_block.clone())
                         .collect();
+
                     let speculative_subdags = self
                         .speculative_linearizer
                         .handle_commit(&self.block_store, speculative_leaders.clone());
@@ -395,7 +402,7 @@ impl<H: BlockHandler> Core<H> {
     }
 
     /// This function updates the APS tree by predicting an order from start_round to last_predicted_round
-    /// start_round: the latest round of the predicted leader block
+    /// start_round: the latest round of the leader block needed to be predicted
     /// last_predicted_round: the round that we last predicted
     fn add_leaders_to_aps_tree(
         &mut self,
@@ -514,6 +521,9 @@ impl<H: BlockHandler> Core<H> {
         committed: Vec<CommittedSubDag>,
         state: &Bytes,
     ) -> Vec<CommitData> {
+        if committed.is_empty() {
+            return vec![];
+        }
         let (consistent_committed_leader_num, decided_leader_num) =
             self.check_speculative_consensus_consistency(&committed);
         // send the final consensus order to speculative executor for commitment
@@ -545,7 +555,7 @@ impl<H: BlockHandler> Core<H> {
 
         // update APS tree and its corresponding sub dags
         self.aps_tree.start_round += decided_leader_num as RoundNumber;
-        self.aps_tree_sub_dags.drain(0..decided_leader_num);
+        self.aps_tree.pending_leaders.drain(0..decided_leader_num);
         if consistent_committed_leader_num == committed.len() {
             tracing::debug!(
                 "Happy path: speculative APS tree is consistent with consensus committed order",
@@ -578,9 +588,6 @@ impl<H: BlockHandler> Core<H> {
         &self,
         committed: &Vec<CommittedSubDag>,
     ) -> (usize, usize) {
-        if committed.is_empty() {
-            panic!("Committed sub dags is empty");
-        }
         let first_committed_round = committed.first().unwrap().anchor.round;
         if self.aps_tree.start_round > first_committed_round {
             panic!("Inconsistent APS tree start round");
