@@ -273,9 +273,6 @@ impl BaseCommitter {
         for voting_block in &voting_blocks {
             let authority = voting_block.reference().authority;
             if voting_block.includes().contains(leader_ref) {
-                tracing::trace!(
-                    "[{self}] {voting_block:?} is a connection for leader {leader_block:?}"
-                );
                 if connection_stake_aggregator.add(authority, &self.committee) {
                     return true;
                 }

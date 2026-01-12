@@ -71,10 +71,14 @@ impl SpeculativeExecutor {
                             match flag {
                                 SpeculativeMessageStatus::Speculative => {
                                     tracing::debug!("Received {} speculatively ordered blocks to execute", sub_dags.len());
+                                    let now_time = std::time::Instant::now();
                                     self.speculative_execution_on_blocks(&sub_dags).await;
+                                    let elapsed = now_time.elapsed();
+                                    tracing::debug!("Speculative execution of {} blocks took {:?}", sub_dags.len(), elapsed);
                                 },
                                 SpeculativeMessageStatus::Consensus => {
                                     tracing::debug!("Received {} consensus ordered blocks {:?} to execute", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
+                                    let now_time = std::time::Instant::now();
 
                                     let committed_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
 
@@ -96,6 +100,10 @@ impl SpeculativeExecutor {
                                     let new_states = self.speculative_execution_on_blocks(&sub_dags).await;
                                     // we can commit the new states as it is derived from consensus order
                                     self.pevm_executor.commit_speculative_execution(new_states);
+
+                                    let elapsed = now_time.elapsed();
+                                    tracing::debug!("Consensus execution of {} blocks took {:?}", sub_dags.len(), elapsed);
+                                    
                                     // Clean and update snapshots
                                     self.clean_and_update_snapshots(&committed_leaders);
 
