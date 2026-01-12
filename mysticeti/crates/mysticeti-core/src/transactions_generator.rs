@@ -28,7 +28,7 @@ pub struct TransactionGenerator {
 }
 
 impl TransactionGenerator {
-    const TARGET_BLOCK_INTERVAL: Duration = Duration::from_millis(10);
+    const TARGET_BLOCK_INTERVAL: Duration = Duration::from_millis(100);
 
     pub fn start(
         sender: mpsc::Sender<Vec<Transaction>>,
@@ -68,8 +68,7 @@ impl TransactionGenerator {
         insufficient_txn_signal_sender: mpsc::Sender<usize>,
     ) {
         let load = self.client_parameters.load;
-        let transactions_per_block_interval =
-            (load + 9) / (100 / Self::TARGET_BLOCK_INTERVAL.as_millis() as usize); // round up division
+        let transactions_per_block_interval = (load + 9) / 10;
         tracing::info!(
             "Generating {transactions_per_block_interval} transactions per {} ms",
             Self::TARGET_BLOCK_INTERVAL.as_millis()
@@ -115,7 +114,9 @@ impl TransactionGenerator {
                 tx_to_report += 1;
 
                 if block_size >= max_block_size {
-                    insufficient_txn_signal_sender.send(block.len()).await;
+                    insufficient_txn_signal_sender
+                        .send(transactions_per_block_interval)
+                        .await;
                     if self.sender.send(block.clone()).await.is_err() {
                         return;
                     }
@@ -124,7 +125,9 @@ impl TransactionGenerator {
                 }
             }
 
-            insufficient_txn_signal_sender.send(block.len()).await;
+            insufficient_txn_signal_sender
+                .send(transactions_per_block_interval)
+                .await;
             if !block.is_empty() && self.sender.send(block).await.is_err() {
                 return;
             }

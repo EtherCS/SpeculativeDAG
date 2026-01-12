@@ -96,8 +96,9 @@ impl Validator {
         // let in_memory_storage = pevm::api::load_in_memory_storage(&workload_type);
         // let account_addresses = pevm::api::load_account_addresses(&workload_type);
 
-        let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) = mpsc::channel(100);
-        let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(100);
+        let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) =
+            mpsc::channel(10000);
+        let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(10000);
         let (speculative_message_sender, speculative_message_receiver) = mpsc::channel(1000);
 
         let mut pevm_transaction_generator = PevmTransactionGenerator::new(

@@ -389,8 +389,8 @@ impl PevmTransactionGenerator {
     }
 
     pub async fn run(&mut self) {
-        const MAX_PENDING_TRANSACTION_NUM: usize = 1000;
-        const INITIAL_BATCH: usize = 100;
+        const MAX_PENDING_TRANSACTION_NUM: usize = 10000;
+        const INITIAL_BATCH: usize = 10;
         let mut new_transactions = Vec::new();
         tracing::info!("Start Running PEVM");
         loop {
