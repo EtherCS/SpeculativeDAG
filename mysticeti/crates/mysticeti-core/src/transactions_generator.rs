@@ -114,14 +114,8 @@ impl TransactionGenerator {
                 tx_to_report += 1;
 
                 if block_size >= max_block_size {
-                    insufficient_txn_signal_sender
-                        .send(transactions_per_block_interval)
-                        .await;
-                    if self.sender.send(block.clone()).await.is_err() {
-                        return;
-                    }
-                    block.clear();
-                    block_size = 0;
+                    tracing::debug!("block size is full: {}", block_size);
+                    break;
                 }
             }
 
