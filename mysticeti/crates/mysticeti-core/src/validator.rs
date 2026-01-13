@@ -152,7 +152,12 @@ impl Validator {
         );
 
         // Executor::start(evm_executor, ordered_txns_receiver);
-        SpeculativeExecutor::start(evm_executor, speculative_message_receiver, node_reputation);
+        SpeculativeExecutor::start(
+            evm_executor,
+            speculative_message_receiver,
+            node_reputation,
+            metrics.clone(),
+        );
 
         TransactionGenerator::start(
             block_sender,

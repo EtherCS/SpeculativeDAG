@@ -103,6 +103,7 @@ fn load_addresses(path: &str) -> anyhow::Result<Addresses> {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TransactionWithHint {
+    pub timestamp: [u8; 8],
     pub raw_hex: String,
     pub caller: Address,
     pub hint: String, // [TODO] The type 'String' is a placeholder for now
@@ -568,6 +569,7 @@ impl PevmScheduler {
         let batch: Vec<TransactionWithHint> = batch
             .into_iter()
             .map(|(raw_hex, caller)| TransactionWithHint {
+                timestamp: [0u8; 8],
                 raw_hex,
                 caller,
                 hint: String::new(), // or some default value
@@ -1302,6 +1304,7 @@ pub fn test_scheduling() {
     let mut transactions_with_hint: Vec<TransactionWithHint> = transactions
         .iter()
         .map(|(raw_hex, caller)| TransactionWithHint {
+            timestamp: [0u8; 8],
             raw_hex: raw_hex.clone(),
             caller: *caller,
             hint: String::new(),
@@ -1380,6 +1383,7 @@ pub fn test_parallel_scheduling() {
     let mut transactions_with_hint: Vec<TransactionWithHint> = transactions
         .iter()
         .map(|(raw_hex, caller)| TransactionWithHint {
+            timestamp: [0u8; 8],
             raw_hex: raw_hex.clone(),
             caller: *caller,
             hint: String::new(),
@@ -1473,6 +1477,7 @@ pub fn test_no_scheduling() {
     let mut transactions_with_hint: Vec<TransactionWithHint> = transactions
         .iter()
         .map(|(raw_hex, caller)| TransactionWithHint {
+            timestamp: [0u8; 8],
             raw_hex: raw_hex.clone(),
             caller: *caller,
             hint: String::new(),

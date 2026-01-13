@@ -91,7 +91,7 @@ impl TransactionGenerator {
             let mut x = 0;
             for _ in 0..transactions_per_block_interval {
                 let batch = pevm_scheduler.fetch_batch(1).await;
-                let fetched_txn = if let Some(txn) = batch.into_iter().next() {
+                let mut fetched_txn = if let Some(txn) = batch.into_iter().next() {
                     tracing::debug!("fetched {}-th txn: {:?}", &x, &txn);
                     x += 1;
                     txn
@@ -99,6 +99,7 @@ impl TransactionGenerator {
                     continue;
                 };
 
+                fetched_txn.timestamp = timestamp;
                 let transaction: Vec<u8> = bincode::serialize(&fetched_txn).unwrap();
 
                 block.push(Transaction::new(transaction));
@@ -182,6 +183,7 @@ impl TransactionGenerator {
                             raw_hex,
                             caller,
                             hint: String::new(), // [TODO] Placeholder
+                            timestamp: [0u8; 8],
                         }
                     })
                     .collect();
@@ -283,6 +285,7 @@ mod tests {
                 .parse()
                 .expect("Invalid address"),
             hint: String::from(""),
+            timestamp: [0u8; 8],
         };
         let encoded: Vec<u8> = bincode::serialize(&tx).unwrap();
         let decoded: TransactionWithHint = bincode::deserialize(&encoded).unwrap();
