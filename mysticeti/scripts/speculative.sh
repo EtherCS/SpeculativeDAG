@@ -1,14 +1,26 @@
-# bash run.sh
+#!/bin/bash
+
+# Configuration
+COMMITTEE_SIZE=${1:-4}
+DURATION=${2:-15}  # Run duration in seconds
+
 cargo build
 
 export RUST_LOG=warn,mysticeti_core::consensus=debug,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::validator=DEBUG,mysticeti_core::transactions_generator=INFO,mysticeti_core::executor=INFO,pevm=INFO,mysticeti_core::speculative_executor=DEBUG,mysticeti_core::block_handler=INFO,
 
 tmux kill-server || true
 
-tmux new -d -s "v0" "cargo run --bin mysticeti -- dry-run --committee-size 4 --authority 0 > v0.log.ansi"
-tmux new -d -s "v1" "cargo run --bin mysticeti -- dry-run --committee-size 4 --authority 1 > v1.log.ansi"
-tmux new -d -s "v2" "cargo run --bin mysticeti -- dry-run --committee-size 4 --authority 2 > v2.log.ansi"
-tmux new -d -s "v3" "cargo run --bin mysticeti -- dry-run --committee-size 4 --authority 3 > v3.log.ansi"
+echo "Starting validators..."
 
-sleep 15
+for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
+    tmux new -d -s "v${i}" "cargo run --bin mysticeti -- dry-run --committee-size ${COMMITTEE_SIZE} --authority ${i} > v${i}.log.ansi"
+done
+
+sleep ${DURATION}
+
+# report the metrics
+curl http://0.0.0.0:1504/metrics > ./log0.txt
+curl http://0.0.0.0:1505/metrics > ./log1.txt
+
+echo "Stopping validators..."
 tmux kill-server
