@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub use ethers::types::Address;
@@ -10,17 +10,13 @@ use crate::{
     metrics::Metrics,
     node_reputation::NodeReputation,
     runtime::{self},
+    transactions_generator::TransactionGenerator,
     types::{
         APSTree, BaseStatement, BlockReference, EvmStateWriteSet, LeaderPredictionStatus,
         SpeculativeExecutionSnapshot, StatementBlock,
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExecutionType {
-    Speculative,
-    Consensus,
-}
 pub enum SpeculativeMessageStatus {
     Speculative, // This is a speculative order
     Consensus,   // This is the final consensus order
@@ -82,20 +78,43 @@ impl SpeculativeExecutor {
                                 SpeculativeMessageStatus::Speculative => {
                                     tracing::debug!("Received {} speculatively ordered blocks to execute", sub_dags.len());
                                     let now_time = std::time::Instant::now();
-                                    self.execution_on_blocks(&sub_dags, ExecutionType::Speculative).await;
+                                    self.execution_on_blocks(&sub_dags).await;
                                     let elapsed = now_time.elapsed();
                                     tracing::debug!("Speculative execution of {} blocks took {:?}", sub_dags.len(), elapsed);
                                 },
                                 SpeculativeMessageStatus::Consensus => {
                                     tracing::debug!("Received {} consensus ordered blocks {:?} to execute", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
-                                    let now_time = std::time::Instant::now();
+                                    let start_time = std::time::Instant::now();
 
+                                    // for the consensus message, sub_dags is the newly committed anchors
                                     let committed_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
+
+                                    // Execute the committed blocks
+                                    let new_states = self.execution_on_blocks(&sub_dags).await;
+                                    // we can commit the new states as it is derived from consensus order
+                                    self.pevm_executor.commit_speculative_execution(new_states);
+
+                                    let elapsed = start_time.elapsed();
+                                    tracing::debug!("Consensus execution of {} blocks took {:?}", sub_dags.len(), elapsed);
+
+                                    // record the end-to-end tx latency
+                                    let current_timestamp = runtime::timestamp_utc();
+                                    for sub_dag in sub_dags.iter() {
+                                        for block in &sub_dag.blocks {
+                                            for statement in block.statements() {
+                                                if let BaseStatement::Share(share) = statement {
+                                                    let creation_time = TransactionGenerator::extract_timestamp(share);
+                                                    self.metrics
+                                                        .transaction_committed_latency
+                                                        .observe(current_timestamp.saturating_sub(creation_time));
+                                                }
+                                            }
+                                        }
+                                    }
 
                                     // update node reputations based on the committed leaders and the previous predictions
                                     let committed_leaders_rounds = committed_leaders.iter().map(|b| b.round).collect::<Vec<u64>>();
                                     let last_committed_leader_round = committed_leaders_rounds.last().cloned().unwrap_or(0);
-
                                     for predicted in aps_tree.pending_leaders.iter().take_while(|p| p.round <= last_committed_leader_round) {
                                         let hit = committed_leaders_rounds.contains(&predicted.round);
                                         match (predicted.clone().status, hit) {
@@ -105,14 +124,6 @@ impl SpeculativeExecutor {
                                             (LeaderPredictionStatus::Skipped, false) => self.node_reputation.update_score(predicted.author, 1),    // correct skip
                                         }
                                     }
-
-                                    // Execute the committed blocks
-                                    let new_states = self.execution_on_blocks(&sub_dags, ExecutionType::Consensus).await;
-                                    // we can commit the new states as it is derived from consensus order
-                                    self.pevm_executor.commit_speculative_execution(new_states);
-
-                                    let elapsed = now_time.elapsed();
-                                    tracing::debug!("Consensus execution of {} blocks took {:?}", sub_dags.len(), elapsed);
 
                                     // Clean and update snapshots
                                     self.clean_and_update_snapshots(&committed_leaders);
@@ -138,11 +149,7 @@ impl SpeculativeExecutor {
 
     /// perform speculative execution on the ordered blocks
     /// can also be called for consensus execution
-    async fn execution_on_blocks(
-        &mut self,
-        sub_dags: &Vec<CommittedSubDag>,
-        execution_type: ExecutionType,
-    ) -> EvmStateWriteSet {
+    async fn execution_on_blocks(&mut self, sub_dags: &Vec<CommittedSubDag>) -> EvmStateWriteSet {
         // Find the best matching snapshot (longest common prefix with sub_dags)
         let best_snapshot = self.find_best_matching_snapshot(&sub_dags);
 
@@ -159,16 +166,13 @@ impl SpeculativeExecutor {
                 let mut new_state = snapshot.transition_states.clone();
                 for sub_dag in sub_dags[snapshot.ordered_leaders.len()..].iter() {
                     let mut txs = Vec::<(String, Address)>::new();
-                    let mut tx_creation_times = Vec::<Duration>::new();
                     let mut block_num = 0;
                     for block in &sub_dag.blocks {
                         block_num += 1;
                         for statement in block.statements() {
                             if let BaseStatement::Share(share) = statement {
-                                let (creation_time, raw_hex, caller) =
-                                    decode_share_base_statement(share.data());
+                                let (raw_hex, caller) = decode_share_base_statement(share.data());
                                 txs.push((raw_hex, caller));
-                                tx_creation_times.push(creation_time);
                             }
                         }
                     }
@@ -177,32 +181,16 @@ impl SpeculativeExecutor {
                         .pevm_executor
                         .speculative_execute(txs, new_state.clone());
                     let end_execution_time = start_execution_time.elapsed();
-                    let avg_block_execution_time = end_execution_time / block_num;
 
                     // Record the average block execution time
                     self.metrics
                         .block_execution_latency
-                        .observe(avg_block_execution_time);
-
-                    if execution_type == ExecutionType::Consensus {
-                        // For consensus execution, we record end-to-end transaction latencies
-                        for creation_time in tx_creation_times.iter() {
-                            self.metrics
-                                .transaction_committed_latency
-                                .observe(end_execution_time - *creation_time);
-                        }
-                    }
+                        .observe(end_execution_time / block_num);
 
                     new_ordered_leaders.push(sub_dag.anchor);
                     if self.node_reputation.get_score(sub_dag.anchor.authority)
                         >= self.node_reputation.threshold_score()
                     {
-                        tracing::debug!(
-                            "Leader {:?} has high reputation score {}, above threshold {}, take a snapshot",
-                            sub_dag.anchor,
-                            self.node_reputation.get_score(sub_dag.anchor.authority),
-                            self.node_reputation.threshold_score()
-                        );
                         // we take snapshot after speculative execution if the next leader is likely correct
                         self.snapshots.push(SpeculativeExecutionSnapshot::new(
                             new_ordered_leaders.clone(),
@@ -220,16 +208,13 @@ impl SpeculativeExecutor {
                 let mut new_state = EvmStateWriteSet::default();
                 for sub_dag in sub_dags.iter() {
                     let mut txs = Vec::<(String, Address)>::new();
-                    let mut tx_creation_times = Vec::<Duration>::new();
                     let mut block_num = 0;
                     for block in &sub_dag.blocks {
                         block_num += 1;
                         for statement in block.statements() {
                             if let BaseStatement::Share(share) = statement {
-                                let (creation_time, raw_hex, caller) =
-                                    decode_share_base_statement(share.data());
+                                let (raw_hex, caller) = decode_share_base_statement(share.data());
                                 txs.push((raw_hex, caller));
-                                tx_creation_times.push(creation_time);
                             }
                         }
                     }
@@ -239,32 +224,16 @@ impl SpeculativeExecutor {
                         .speculative_execute(txs, new_state.clone());
 
                     let end_execution_time = start_execution_time.elapsed();
-                    let avg_block_execution_time = end_execution_time / block_num;
 
                     // Record the average block execution time
                     self.metrics
                         .block_execution_latency
-                        .observe(avg_block_execution_time);
-
-                    if execution_type == ExecutionType::Consensus {
-                        // For consensus execution, we record end-to-end transaction latencies
-                        for creation_time in tx_creation_times.iter() {
-                            self.metrics
-                                .transaction_committed_latency
-                                .observe(end_execution_time - *creation_time);
-                        }
-                    }
+                        .observe(end_execution_time / block_num);
 
                     new_ordered_leaders.push(sub_dag.anchor);
                     if self.node_reputation.get_score(sub_dag.anchor.authority)
                         >= self.node_reputation.threshold_score()
                     {
-                        tracing::debug!(
-                            "Leader {:?} has high reputation score {}, above threshold {}, take a snapshot",
-                            sub_dag.anchor,
-                            self.node_reputation.get_score(sub_dag.anchor.authority),
-                            self.node_reputation.threshold_score()
-                        );
                         // we take snapshot after speculative execution if the next leader is likely correct
                         self.snapshots.push(SpeculativeExecutionSnapshot::new(
                             new_ordered_leaders.clone(),
@@ -339,13 +308,11 @@ impl SpeculativeExecutor {
 }
 
 /// Decode a share base statement to extract the transaction creation time, raw hex, and caller address
-fn decode_share_base_statement(data: &[u8]) -> (Duration, String, Address) {
+fn decode_share_base_statement(data: &[u8]) -> (String, Address) {
     let decoded: TransactionWithHint = bincode::deserialize(&data).unwrap();
-    let bytes = decoded.timestamp;
-    let creation_time = Duration::from_millis(u64::from_le_bytes(bytes));
     let raw_hex = decoded.raw_hex;
     let caller = decoded.caller;
-    (creation_time, raw_hex, caller)
+    (raw_hex, caller)
 }
 
 /// Calculate the length of the common prefix between two leader sequences
