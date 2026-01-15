@@ -55,7 +55,7 @@ pub struct Core<H: BlockHandler> {
     rounds_in_epoch: RoundNumber,
     committer: UniversalCommitter,
     /// The sender of ordered blocks to executor
-    ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
+    committed_message_sender: mpsc::Sender<Vec<CommittedSubDag>>,
 }
 
 pub struct CoreOptions {
@@ -80,7 +80,7 @@ impl<H: BlockHandler> Core<H> {
         recovered: RecoveredState,
         mut wal_writer: WalWriter,
         options: CoreOptions,
-        ordered_txns_sender: mpsc::Sender<Vec<Data<StatementBlock>>>,
+        committed_message_sender: mpsc::Sender<Vec<CommittedSubDag>>,
     ) -> Self {
         let RecoveredState {
             block_store,
@@ -166,7 +166,7 @@ impl<H: BlockHandler> Core<H> {
             epoch_manager,
             rounds_in_epoch: public_config.parameters.rounds_in_epoch,
             committer,
-            ordered_txns_sender,
+            committed_message_sender,
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -419,6 +419,15 @@ impl<H: BlockHandler> Core<H> {
         committed: Vec<CommittedSubDag>,
         state: &Bytes,
     ) -> Vec<CommitData> {
+        if committed.is_empty() {
+            return vec![];
+        }
+
+        // send the committed blocks to executor for execution
+        self.committed_message_sender
+            .try_send(committed.clone())
+            .expect("Failed to send committed sub-dags to executor");
+
         let mut commit_data = vec![];
         for commit in &committed {
             for block in &commit.blocks {
@@ -426,10 +435,6 @@ impl<H: BlockHandler> Core<H> {
                     .observe_committed_block(block, &self.committee);
             }
             commit_data.push(CommitData::from(commit));
-
-            self.ordered_txns_sender
-                .try_send(commit.blocks.clone())
-                .expect("Failed to send ordered blocks to executor");
         }
         self.write_state(); // todo - this can be done less frequently to reduce IO
         self.write_commits(&commit_data, state);

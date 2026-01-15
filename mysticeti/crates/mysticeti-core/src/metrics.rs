@@ -9,19 +9,10 @@ use std::{
 };
 
 use prometheus::{
-    register_counter_vec_with_registry,
-    register_histogram_vec_with_registry,
-    register_int_counter_vec_with_registry,
-    register_int_counter_with_registry,
-    register_int_gauge_vec_with_registry,
-    register_int_gauge_with_registry,
-    CounterVec,
-    HistogramVec,
-    IntCounter,
-    IntCounterVec,
-    IntGauge,
-    IntGaugeVec,
-    Registry,
+    register_counter_vec_with_registry, register_histogram_vec_with_registry,
+    register_int_counter_vec_with_registry, register_int_counter_with_registry,
+    register_int_gauge_vec_with_registry, register_int_gauge_with_registry, CounterVec,
+    HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Registry,
 };
 use tabled::{Table, Tabled};
 use tokio::time::Instant;
@@ -75,6 +66,7 @@ pub struct Metrics {
     pub transaction_certified_latency: HistogramSender<Duration>,
     pub certificate_committed_latency: HistogramSender<Duration>,
     pub transaction_committed_latency: HistogramSender<Duration>,
+    pub block_execution_latency: HistogramSender<Duration>,
 
     pub proposed_block_size_bytes: HistogramSender<usize>,
     pub proposed_block_transaction_count: HistogramSender<usize>,
@@ -92,6 +84,7 @@ pub struct MetricReporter {
     pub transaction_certified_latency: HistogramReporter<Duration>,
     pub certificate_committed_latency: HistogramReporter<Duration>,
     pub transaction_committed_latency: HistogramReporter<Duration>,
+    pub block_execution_latency: HistogramReporter<Duration>,
 
     pub proposed_block_size_bytes: HistogramReporter<usize>,
     pub proposed_block_transaction_count: HistogramReporter<usize>,
@@ -118,6 +111,7 @@ impl Metrics {
         let (transaction_certified_latency_hist, transaction_certified_latency) = histogram();
         let (certificate_committed_latency_hist, certificate_committed_latency) = histogram();
         let (transaction_committed_latency_hist, transaction_committed_latency) = histogram();
+        let (block_execution_latency_hist, block_execution_latency) = histogram();
 
         let (proposed_block_size_bytes_hist, proposed_block_size_bytes) = histogram();
         let (proposed_block_transaction_count_hist, proposed_block_transaction_count) = histogram();
@@ -151,6 +145,11 @@ impl Metrics {
                 transaction_committed_latency_hist,
                 registry,
                 "transaction_committed_latency",
+            ),
+            block_execution_latency: HistogramReporter::new_in_registry(
+                block_execution_latency_hist,
+                registry,
+                "block_execution_latency",
             ),
 
             proposed_block_size_bytes: HistogramReporter::new_in_registry(
@@ -342,6 +341,7 @@ impl Metrics {
             transaction_certified_latency,
             certificate_committed_latency,
             transaction_committed_latency,
+            block_execution_latency,
 
             proposed_block_size_bytes,
             proposed_block_transaction_count,
@@ -458,6 +458,7 @@ impl MetricReporter {
         self.transaction_certified_latency.clear_receive_all();
         self.certificate_committed_latency.clear_receive_all();
         self.transaction_committed_latency.clear_receive_all();
+        self.block_execution_latency.clear_receive_all();
 
         self.proposed_block_size_bytes.clear_receive_all();
         self.proposed_block_transaction_count.clear_receive_all();
@@ -488,6 +489,7 @@ impl MetricReporter {
         self.transaction_certified_latency.report();
         self.certificate_committed_latency.report();
         self.transaction_committed_latency.report();
+        self.block_execution_latency.report();
 
         self.proposed_block_size_bytes.report();
         self.proposed_block_transaction_count.report();

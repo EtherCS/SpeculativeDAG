@@ -95,9 +95,10 @@ impl Validator {
         // let in_memory_storage = pevm::api::load_in_memory_storage(&workload_type);
         // let account_addresses = pevm::api::load_account_addresses(&workload_type);
 
-        let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) = mpsc::channel(100);
-        let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(100);
-        let (ordered_txns_sender, ordered_txns_receiver) = mpsc::channel(1000);
+        let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) =
+            mpsc::channel(10000);
+        let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(10000);
+        let (committed_message_sender, committed_message_receiver) = mpsc::channel(10000);
 
         let mut pevm_transaction_generator = PevmTransactionGenerator::new(
             workload_type.clone(),
@@ -137,7 +138,7 @@ impl Validator {
                 .to_string(),
         );
 
-        Executor::start(evm_executor, ordered_txns_receiver);
+        Executor::start(evm_executor, committed_message_receiver, metrics.clone());
 
         TransactionGenerator::start(
             block_sender,
@@ -168,7 +169,7 @@ impl Validator {
             recovered,
             wal_writer,
             CoreOptions::default(),
-            ordered_txns_sender,
+            committed_message_sender,
         );
         let network = Network::load(
             &public_config,

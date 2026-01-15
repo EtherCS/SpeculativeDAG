@@ -24,11 +24,7 @@ use crate::{
     syncer::CommitObserver,
     transactions_generator::TransactionGenerator,
     types::{
-        AuthorityIndex,
-        BaseStatement,
-        BlockReference,
-        StatementBlock,
-        Transaction,
+        AuthorityIndex, BaseStatement, BlockReference, StatementBlock, Transaction,
         TransactionLocator,
     },
 };
@@ -394,7 +390,8 @@ impl<H: ProcessedTransactionHandler<TransactionLocator>> TestCommitHandler<H> {
         // Record inter-block latency.
         if let Some(instant) = block_creation {
             let latency = instant.elapsed();
-            self.metrics.transaction_committed_latency.observe(latency);
+            // [JT] [JT] we record the end-to-end latency when transactions are committed in executor.rs
+            // self.metrics.transaction_committed_latency.observe(latency);
             self.metrics
                 .inter_block_latency_s
                 .with_label_values(&["shared"])

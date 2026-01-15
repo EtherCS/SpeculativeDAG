@@ -28,7 +28,7 @@ pub struct TransactionGenerator {
 }
 
 impl TransactionGenerator {
-    const TARGET_BLOCK_INTERVAL: Duration = Duration::from_millis(10);
+    const TARGET_BLOCK_INTERVAL: Duration = Duration::from_millis(100);
 
     pub fn start(
         sender: mpsc::Sender<Vec<Transaction>>,
@@ -68,8 +68,7 @@ impl TransactionGenerator {
         insufficient_txn_signal_sender: mpsc::Sender<usize>,
     ) {
         let load = self.client_parameters.load;
-        let transactions_per_block_interval =
-            (load + 9) / (100 / Self::TARGET_BLOCK_INTERVAL.as_millis() as usize); // round up division
+        let transactions_per_block_interval = (load + 9) / 10;
         tracing::info!(
             "Generating {transactions_per_block_interval} transactions per {} ms",
             Self::TARGET_BLOCK_INTERVAL.as_millis()
@@ -92,7 +91,7 @@ impl TransactionGenerator {
             let mut x = 0;
             for _ in 0..transactions_per_block_interval {
                 let batch = pevm_scheduler.fetch_batch(1).await;
-                let fetched_txn = if let Some(txn) = batch.into_iter().next() {
+                let mut fetched_txn = if let Some(txn) = batch.into_iter().next() {
                     tracing::debug!("fetched {}-th txn: {:?}", &x, &txn);
                     x += 1;
                     txn
@@ -100,6 +99,7 @@ impl TransactionGenerator {
                     continue;
                 };
 
+                fetched_txn.timestamp = timestamp;
                 let transaction: Vec<u8> = bincode::serialize(&fetched_txn).unwrap();
 
                 block.push(Transaction::new(transaction));
@@ -115,16 +115,14 @@ impl TransactionGenerator {
                 tx_to_report += 1;
 
                 if block_size >= max_block_size {
-                    insufficient_txn_signal_sender.send(block.len()).await;
-                    if self.sender.send(block.clone()).await.is_err() {
-                        return;
-                    }
-                    block.clear();
-                    block_size = 0;
+                    tracing::debug!("block size is full: {}", block_size);
+                    break;
                 }
             }
 
-            insufficient_txn_signal_sender.send(block.len()).await;
+            insufficient_txn_signal_sender
+                .send(transactions_per_block_interval)
+                .await;
             if !block.is_empty() && self.sender.send(block).await.is_err() {
                 return;
             }
@@ -185,6 +183,7 @@ impl TransactionGenerator {
                             raw_hex,
                             caller,
                             hint: String::new(), // [TODO] Placeholder
+                            timestamp: [0u8; 8],
                         }
                     })
                     .collect();
@@ -286,6 +285,7 @@ mod tests {
                 .parse()
                 .expect("Invalid address"),
             hint: String::from(""),
+            timestamp: [0u8; 8],
         };
         let encoded: Vec<u8> = bincode::serialize(&tx).unwrap();
         let decoded: TransactionWithHint = bincode::deserialize(&encoded).unwrap();
