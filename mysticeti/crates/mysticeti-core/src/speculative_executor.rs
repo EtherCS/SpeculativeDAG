@@ -30,8 +30,6 @@ pub enum SpeculativeMessage {
 pub struct SpeculativeExecutor {
     /// The execution engine, states are in memory
     pub pevm_executor: PevmExecutor,
-    /// The committed blocks waiting to be persist into storage
-    pub pending_committed_leader_blocks: Vec<Data<StatementBlock>>,
     /// The receiver of speculatively ordered blocks from core
     pub speculative_message_receiver: mpsc::Receiver<SpeculativeMessage>,
     /// The maintained speculative execution snapshots
@@ -57,7 +55,6 @@ impl SpeculativeExecutor {
 
             Self {
                 pevm_executor,
-                pending_committed_leader_blocks: Vec::new(),
                 speculative_message_receiver,
                 snapshots: vec![initial_snapshot], // Start with base snapshot
                 node_reputation,
@@ -138,9 +135,8 @@ impl SpeculativeExecutor {
                     }
                 }
                 else => {
-                    // Channel is closed, process any remaining blocks and exit
-                    tracing::info!("Channel closed, processing remaining {} blocks", self.pending_committed_leader_blocks.len());
-                    // self.process_pending_blocks().await;
+                    // Channel is closed
+                    tracing::info!("Channel closed");
                     break;
                 }
             }
