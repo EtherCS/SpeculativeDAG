@@ -62,6 +62,8 @@ pub struct NodeParameters {
     pub reputation_threshold_denominator: u64,
     #[serde(default = "node_defaults::default_initial_score")]
     pub initial_score: i128,
+    #[serde(default = "node_defaults::default_network_jitter_simulation")]
+    pub network_jitter_simulation: NetworkJitterSimulation,
 }
 
 pub mod node_defaults {
@@ -124,6 +126,10 @@ pub mod node_defaults {
     pub fn default_initial_score() -> i128 {
         0
     }
+
+    pub fn default_network_jitter_simulation() -> super::NetworkJitterSimulation {
+        super::NetworkJitterSimulation::default()
+    }
 }
 
 impl Default for NodeParameters {
@@ -145,6 +151,7 @@ impl Default for NodeParameters {
             reputation_threshold_denominator:
                 node_defaults::default_reputation_threshold_denominator(),
             initial_score: node_defaults::default_initial_score(),
+            network_jitter_simulation: node_defaults::default_network_jitter_simulation(),
         }
     }
 }
@@ -366,3 +373,77 @@ impl Default for ClientParameters {
 }
 
 impl ImportExport for ClientParameters {}
+
+/// Configuration for simulating network jitter in nodes.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NetworkJitterSimulation {
+    /// The number of nodes in total.
+    #[serde(default = "network_jitter_defaults::default_committee_size")]
+    pub committee_size: usize,
+    /// The number of nodes experiencing network jitter.
+    /// By default, the last `fault_num` nodes in the committee will experience network jitter.
+    #[serde(default = "network_jitter_defaults::default_fault_num")]
+    pub fault_num: usize,
+    /// For each node experiencing network jitter, the number of its connections that will be affected.
+    #[serde(default = "network_jitter_defaults::default_delay_connection_num")]
+    pub delay_connection_num: usize,
+    /// The network delay added to connections, used to simulate unstable network conditions.
+    #[serde(default = "network_jitter_defaults::default_network_jitter")]
+    pub network_jitter: Duration,
+    /// The round after which the network is considered stable (i.e., not network jitter).
+    #[serde(default = "network_jitter_defaults::default_jitter_duration")]
+    pub jitter_duration: Duration,
+}
+
+pub mod network_jitter_defaults {
+    pub fn default_committee_size() -> usize {
+        4
+    }
+
+    pub fn default_fault_num() -> usize {
+        0
+    }
+
+    /// By default, half of the committee size will have delayed connections.
+    pub fn default_delay_connection_num() -> usize {
+        super::network_jitter_defaults::default_committee_size() / 2
+    }
+
+    pub fn default_network_jitter() -> std::time::Duration {
+        std::time::Duration::from_millis(100)
+    }
+
+    pub fn default_jitter_duration() -> super::Duration {
+        std::time::Duration::from_secs(10)
+    }
+}
+
+impl NetworkJitterSimulation {
+    pub fn new(
+        committee_size: usize,
+        fault_num: usize,
+        delay_connection_num: usize,
+        network_jitter: Duration,
+        jitter_duration: Duration,
+    ) -> Self {
+        Self {
+            committee_size,
+            fault_num,
+            delay_connection_num,
+            network_jitter,
+            jitter_duration,
+        }
+    }
+}
+
+impl Default for NetworkJitterSimulation {
+    fn default() -> Self {
+        Self {
+            committee_size: network_jitter_defaults::default_committee_size(),
+            fault_num: network_jitter_defaults::default_fault_num(),
+            delay_connection_num: network_jitter_defaults::default_delay_connection_num(),
+            network_jitter: network_jitter_defaults::default_network_jitter(),
+            jitter_duration: network_jitter_defaults::default_jitter_duration(),
+        }
+    }
+}

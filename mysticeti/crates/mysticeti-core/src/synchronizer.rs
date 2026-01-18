@@ -1,7 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use futures::future::join_all;
 use rand::{seq::SliceRandom, thread_rng};
@@ -9,6 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     block_handler::BlockHandler,
+    config::NetworkJitterSimulation,
     metrics::Metrics,
     net_sync::{self, NetworkSyncerInner},
     network::NetworkMessage,
@@ -123,7 +128,13 @@ where
             .ok()
     }
 
-    pub async fn disseminate_own_blocks(&mut self, round: RoundNumber) {
+    pub async fn disseminate_own_blocks(
+        &mut self,
+        round: RoundNumber,
+        njs_paras: NetworkJitterSimulation,
+        is_network_jitter_node: bool,
+        is_delay_connection: bool,
+    ) {
         if let Some(existing) = self.own_blocks.take() {
             existing.abort();
             existing.await.ok();
@@ -134,6 +145,9 @@ where
             self.inner.clone(),
             round,
             self.parameters.batch_size,
+            njs_paras,
+            is_network_jitter_node,
+            is_delay_connection,
         ));
         self.own_blocks = Some(handle);
     }
@@ -143,14 +157,27 @@ where
         inner: Arc<NetworkSyncerInner<H, C>>,
         mut round: RoundNumber,
         batch_size: usize,
+        njs_paras: NetworkJitterSimulation,
+        is_network_jitter_node: bool,
+        is_delay_connection: bool,
     ) -> Option<()> {
+        let start_time = Instant::now();
         loop {
             let notified = inner.notify.notified();
             let blocks = inner.block_store.get_own_blocks(round, batch_size);
-            for block in blocks {
-                round = block.round();
-                to.send(NetworkMessage::Block(block)).await.ok()?;
+            if !blocks.is_empty() {
+                if is_network_jitter_node
+                    && is_delay_connection
+                    && (start_time.elapsed() < njs_paras.jitter_duration)
+                {
+                    sleep(njs_paras.network_jitter).await;
+                }
+                for block in blocks {
+                    round = block.round();
+                    to.send(NetworkMessage::Block(block)).await.ok()?;
+                }
             }
+
             notified.await
         }
     }
