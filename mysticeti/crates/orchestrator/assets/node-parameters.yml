@@ -1,3 +1,15 @@
 leader_timeout:
   secs: 1
   nanos: 0
+
+# # The following parameters are used to simulate network jitter (unstable network connections).
+# network_jitter_simulation:
+#   committee_size: 10
+#   fault_num: 1
+#   delay_connection_num: 5
+#   network_jitter: 
+#     secs: 0
+#     nanos: 100000000 # in nanoseconds, 100 ms by default
+#   jitter_duration: 
+#     secs: 50 # in seconds
+#     nanos: 0
