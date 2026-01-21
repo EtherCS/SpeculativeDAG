@@ -73,7 +73,7 @@ impl SpeculativeExecutor {
                         SpeculativeMessage::SpeculativeExecuteTxs(aps_tree, sub_dags, flag) => {
                             match flag {
                                 SpeculativeMessageStatus::Speculative => {
-                                    tracing::debug!("Received {} speculatively ordered blocks to execute", sub_dags.len());
+                                    tracing::debug!("Received {} speculatively ordered blocks to execute, leaders {:?}", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
                                     let now_time = std::time::Instant::now();
                                     self.execution_on_blocks(&sub_dags).await;
                                     let elapsed = now_time.elapsed();
@@ -134,11 +134,7 @@ impl SpeculativeExecutor {
                         },
                     }
                 }
-                else => {
-                    // Channel is closed
-                    tracing::info!("Channel closed");
-                    break;
-                }
+                // Todo: We might need to handle error here
             }
         }
     }
