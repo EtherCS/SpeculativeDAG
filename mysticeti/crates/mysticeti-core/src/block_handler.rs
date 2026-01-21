@@ -391,7 +391,9 @@ impl<H: ProcessedTransactionHandler<TransactionLocator>> TestCommitHandler<H> {
         if let Some(instant) = block_creation {
             let latency = instant.elapsed();
             // [JT] we record the end-to-end latency when transactions are committed in speculative_executor.rs
+            // Here, instead, we record the block consensus latency, i.e., time from block creation to block consensus (excluding execution time).
             // self.metrics.transaction_committed_latency.observe(latency);
+            self.metrics.block_consensus_latency.observe(latency);
             self.metrics
                 .inter_block_latency_s
                 .with_label_values(&["shared"])
