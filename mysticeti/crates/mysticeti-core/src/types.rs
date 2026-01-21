@@ -639,7 +639,7 @@ impl AsBytes for Transaction {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum LeaderPredictionStatus {
     Committed, // Predicted as to-commit
     Skipped,   // Predicted as to-skip

@@ -405,7 +405,7 @@ impl<H: BlockHandler> Core<H> {
     /// start_round: the latest round of the leader block needed to be predicted
     /// last_predicted_round: the round that we last predicted
     fn add_leaders_to_aps_tree(
-        &mut self,
+        &self,
         start_round: RoundNumber,
         last_predicted_round: RoundNumber,
     ) -> Vec<LeaderPrediction> {

@@ -99,7 +99,7 @@ impl Validator {
         let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) =
             mpsc::channel(10000);
         let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(10000);
-        let (speculative_message_sender, speculative_message_receiver) = mpsc::channel(1000);
+        let (speculative_message_sender, speculative_message_receiver) = mpsc::channel(10000);
 
         let mut pevm_transaction_generator = PevmTransactionGenerator::new(
             workload_type.clone(),

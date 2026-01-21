@@ -8,7 +8,7 @@ DELAY_CONNECTION_NUM=${4:-2} # Number of connections to delay per jitter node
 JITTER_MS=${5:-100} # Jitter delay in milliseconds
 DURATION_SECS=${6:-15} # Jitter duration in seconds
 
-cargo build
+cargo build 2>&1 >/dev/null | tail -n 10
 
 export RUST_LOG=warn,mysticeti_core::consensus=debug,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::validator=DEBUG,mysticeti_core::transactions_generator=INFO,mysticeti_core::executor=INFO,pevm=INFO,mysticeti_core::speculative_executor=DEBUG,mysticeti_core::block_handler=INFO,
 
