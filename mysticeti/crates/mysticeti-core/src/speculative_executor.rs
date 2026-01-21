@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 pub use ethers::types::Address;
@@ -29,7 +29,7 @@ pub enum SpeculativeMessage {
 
 pub struct SpeculativeExecutor {
     /// The execution engine, states are in memory
-    pub pevm_executor: PevmExecutor,
+    pub pevm_executor: Arc<Mutex<PevmExecutor>>,
     /// The receiver of speculatively ordered blocks from core
     pub speculative_message_receiver: mpsc::Receiver<SpeculativeMessage>,
     /// The maintained speculative execution snapshots
@@ -54,7 +54,7 @@ impl SpeculativeExecutor {
             );
 
             Self {
-                pevm_executor,
+                pevm_executor: Arc::new(Mutex::new(pevm_executor)),
                 speculative_message_receiver,
                 snapshots: vec![initial_snapshot], // Start with base snapshot
                 node_reputation,
@@ -73,11 +73,11 @@ impl SpeculativeExecutor {
                         SpeculativeMessage::SpeculativeExecuteTxs(aps_tree, sub_dags, flag) => {
                             match flag {
                                 SpeculativeMessageStatus::Speculative => {
-                                    tracing::debug!("Received {} speculatively ordered blocks to execute", sub_dags.len());
+                                    tracing::debug!("Received {} speculatively ordered blocks to execute, leaders {:?}", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
                                     let now_time = std::time::Instant::now();
                                     self.execution_on_blocks(&sub_dags).await;
                                     let elapsed = now_time.elapsed();
-                                    tracing::debug!("Speculative execution of {} blocks took {:?}", sub_dags.len(), elapsed);
+                                    tracing::debug!("Speculative execution of {:?} blocks took {:?}", sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>(), elapsed);
                                 },
                                 SpeculativeMessageStatus::Consensus => {
                                     tracing::debug!("Received {} consensus ordered blocks {:?} to execute", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
@@ -88,33 +88,40 @@ impl SpeculativeExecutor {
 
                                     // Execute the committed blocks
                                     let new_states = self.execution_on_blocks(&sub_dags).await;
-                                    // we can commit the new states as it is derived from consensus order
-                                    self.pevm_executor.commit_speculative_execution(new_states);
+
+                                    // Commit in spawn_blocking to avoid blocking the async runtime
+                                    let pevm_executor = Arc::clone(&self.pevm_executor);
+                                    tokio::task::spawn_blocking(move || {
+                                        pevm_executor.lock().unwrap().commit_speculative_execution(new_states);
+                                    }).await.expect("Commit task failed");
 
                                     let elapsed = start_time.elapsed();
                                     tracing::debug!("Consensus execution of {} blocks took {:?}", sub_dags.len(), elapsed);
 
                                     // record the end-to-end tx latency
                                     let current_timestamp = runtime::timestamp_utc();
-                                    for sub_dag in sub_dags.iter() {
-                                        for block in &sub_dag.blocks {
-                                            for statement in block.statements() {
-                                                if let BaseStatement::Share(share) = statement {
-                                                    let creation_time = TransactionGenerator::extract_timestamp(share);
-                                                    self.metrics
-                                                        .transaction_committed_latency
-                                                        .observe(current_timestamp.saturating_sub(creation_time));
+                                    let metrics = self.metrics.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        for sub_dag in sub_dags.iter() {
+                                            for block in &sub_dag.blocks {
+                                                for statement in block.statements() {
+                                                    if let BaseStatement::Share(share) = statement {
+                                                        let creation_time = TransactionGenerator::extract_timestamp(share);
+                                                        metrics
+                                                            .transaction_committed_latency
+                                                            .observe(current_timestamp.saturating_sub(creation_time));
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
+                                    }).await.expect("Latency recording task failed");
 
                                     // update node reputations based on the committed leaders and the previous predictions
                                     let committed_leaders_rounds = committed_leaders.iter().map(|b| b.round).collect::<Vec<u64>>();
-                                    let last_committed_leader_round = committed_leaders_rounds.last().cloned().unwrap_or(0);
+                                    let last_committed_leader_round = *committed_leaders_rounds.last().unwrap_or(&0);
                                     for predicted in aps_tree.pending_leaders.iter().take_while(|p| p.round <= last_committed_leader_round) {
                                         let hit = committed_leaders_rounds.contains(&predicted.round);
-                                        match (predicted.clone().status, hit) {
+                                        match (predicted.status, hit) {
                                             (LeaderPredictionStatus::Committed, true) => self.node_reputation.update_score(predicted.author, 1),  // correct
                                             (LeaderPredictionStatus::Committed, false) => self.node_reputation.update_score(predicted.author, -1), // incorrect
                                             (LeaderPredictionStatus::Skipped, true) => self.node_reputation.update_score(predicted.author, -1),    // missed
@@ -134,11 +141,7 @@ impl SpeculativeExecutor {
                         },
                     }
                 }
-                else => {
-                    // Channel is closed
-                    tracing::info!("Channel closed");
-                    break;
-                }
+                // Todo: We might need to handle error here
             }
         }
     }
@@ -151,20 +154,27 @@ impl SpeculativeExecutor {
 
         match best_snapshot {
             Some(snapshot) => {
+                let skip_count = snapshot.ordered_leaders.len();
                 tracing::debug!(
                     "Found matching snapshot with {} leaders, executing {} new leader blocks on top",
-                    snapshot.ordered_leaders.len(),
-                    sub_dags.len() - snapshot.ordered_leaders.len()
+                    skip_count,
+                    sub_dags.len() - skip_count
                 );
 
                 // Extract transactions from the new ordered blocks
                 let mut new_ordered_leaders = snapshot.ordered_leaders.clone();
                 let mut new_state = snapshot.transition_states.clone();
-                for sub_dag in sub_dags[snapshot.ordered_leaders.len()..].iter() {
+
+                for (idx, sub_dag) in sub_dags[skip_count..].iter().enumerate() {
+                    // Yield to runtime every few iterations to prevent blocking
+                    if idx > 0 && idx % 5 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+
                     let mut txs = Vec::<(String, Address)>::new();
-                    let mut block_num = 0;
+                    let block_count = sub_dag.blocks.len();
+
                     for block in &sub_dag.blocks {
-                        block_num += 1;
                         for statement in block.statements() {
                             if let BaseStatement::Share(share) = statement {
                                 let (raw_hex, caller) = decode_share_base_statement(share.data());
@@ -172,16 +182,26 @@ impl SpeculativeExecutor {
                             }
                         }
                     }
+
                     let start_execution_time = std::time::Instant::now();
-                    new_state = self
-                        .pevm_executor
-                        .speculative_execute(txs, new_state.clone());
+
+                    // Execute in spawn_blocking to avoid blocking the async runtime
+                    let executor = Arc::clone(&self.pevm_executor);
+                    let state = new_state.clone();
+                    new_state = tokio::task::spawn_blocking(move || {
+                        executor.lock().unwrap().speculative_execute(txs, state)
+                    })
+                    .await
+                    .expect("Execution task failed");
+
                     let end_execution_time = start_execution_time.elapsed();
 
                     // Record the average block execution time
-                    self.metrics
-                        .block_execution_latency
-                        .observe(end_execution_time / block_num);
+                    if block_count > 0 {
+                        self.metrics
+                            .block_execution_latency
+                            .observe(end_execution_time / block_count as u32);
+                    }
 
                     new_ordered_leaders.push(sub_dag.anchor);
                     if self.node_reputation.get_score(sub_dag.anchor.authority)
@@ -195,18 +215,24 @@ impl SpeculativeExecutor {
                     }
                 }
 
-                return new_state;
+                new_state
             }
             None => {
                 tracing::debug!("No matching snapshot found, re-execute all transactions");
                 // Extract transactions from the new ordered blocks
-                let mut new_ordered_leaders = vec![];
+                let mut new_ordered_leaders = Vec::with_capacity(sub_dags.len());
                 let mut new_state = EvmStateWriteSet::default();
-                for sub_dag in sub_dags.iter() {
+
+                for (idx, sub_dag) in sub_dags.iter().enumerate() {
+                    // Yield to runtime every few iterations to prevent blocking
+                    if idx > 0 && idx % 5 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+
                     let mut txs = Vec::<(String, Address)>::new();
-                    let mut block_num = 0;
+                    let block_count = sub_dag.blocks.len();
+
                     for block in &sub_dag.blocks {
-                        block_num += 1;
                         for statement in block.statements() {
                             if let BaseStatement::Share(share) = statement {
                                 let (raw_hex, caller) = decode_share_base_statement(share.data());
@@ -214,17 +240,26 @@ impl SpeculativeExecutor {
                             }
                         }
                     }
+
                     let start_execution_time = std::time::Instant::now();
-                    new_state = self
-                        .pevm_executor
-                        .speculative_execute(txs, new_state.clone());
+
+                    // Execute in spawn_blocking to avoid blocking the async runtime
+                    let executor = Arc::clone(&self.pevm_executor);
+                    let state = new_state.clone();
+                    new_state = tokio::task::spawn_blocking(move || {
+                        executor.lock().unwrap().speculative_execute(txs, state)
+                    })
+                    .await
+                    .expect("Execution task failed");
 
                     let end_execution_time = start_execution_time.elapsed();
 
                     // Record the average block execution time
-                    self.metrics
-                        .block_execution_latency
-                        .observe(end_execution_time / block_num);
+                    if block_count > 0 {
+                        self.metrics
+                            .block_execution_latency
+                            .observe(end_execution_time / block_count as u32);
+                    }
 
                     new_ordered_leaders.push(sub_dag.anchor);
                     if self.node_reputation.get_score(sub_dag.anchor.authority)
@@ -238,7 +273,7 @@ impl SpeculativeExecutor {
                     }
                 }
 
-                return new_state;
+                new_state
             }
         }
     }
