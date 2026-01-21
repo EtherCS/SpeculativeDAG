@@ -63,7 +63,7 @@ pub struct NodeParameters {
     #[serde(default = "node_defaults::default_initial_score")]
     pub initial_score: i128,
     #[serde(default = "node_defaults::default_network_jitter_simulation")]
-    pub network_jitter_simulation: NetworkJitterSimulation,
+    pub network_jitter_simulation: Option<NetworkJitterSimulation>,
 }
 
 pub mod node_defaults {
@@ -127,8 +127,9 @@ pub mod node_defaults {
         0
     }
 
-    pub fn default_network_jitter_simulation() -> super::NetworkJitterSimulation {
-        super::NetworkJitterSimulation::default()
+    pub fn default_network_jitter_simulation() -> Option<super::NetworkJitterSimulation> {
+        // super::NetworkJitterSimulation::default()
+        None
     }
 }
 

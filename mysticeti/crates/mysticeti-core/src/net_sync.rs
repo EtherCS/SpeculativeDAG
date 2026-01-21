@@ -102,16 +102,18 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         ));
 
         // By default, we consider the last js_paras.fault_num are fault
-        let network_jitter_simulation_parameters =
-            public_config.parameters.network_jitter_simulation.clone();
-        let is_network_jitter_node = if authority_index as usize
-            >= (network_jitter_simulation_parameters.committee_size
-                - network_jitter_simulation_parameters.fault_num)
-        {
-            true
-        } else {
-            false
-        };
+        let mut network_jitter_simulation_parameters = NetworkJitterSimulation::default();
+        let mut is_network_jitter_node = false;
+        if let Some(net_para) = &public_config.parameters.network_jitter_simulation {
+            network_jitter_simulation_parameters = net_para.clone();
+            is_network_jitter_node =
+                if authority_index as usize >= (net_para.committee_size - net_para.fault_num) {
+                    true
+                } else {
+                    false
+                }
+        }
+
         let main_task = handle.spawn(Self::run(
             network,
             inner.clone(),
@@ -233,14 +235,18 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         while let Some(message) = inner.recv_or_stopped(&mut connection.receiver).await {
             match message {
                 NetworkMessage::SubscribeOwnFrom(round) => {
-                    disseminator
-                        .disseminate_own_blocks(
-                            round,
-                            network_jitter_simulation_parameters.clone(),
-                            is_network_jitter_node,
-                            is_delay_connection,
-                        )
-                        .await
+                    if is_delay_connection {
+                        disseminator
+                            .disseminate_own_blocks_under_network_jitter(
+                                round,
+                                network_jitter_simulation_parameters.clone(),
+                                is_network_jitter_node,
+                                is_delay_connection,
+                            )
+                            .await;
+                    } else {
+                        disseminator.disseminate_own_blocks(round).await;
+                    }
                 }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);

@@ -385,7 +385,7 @@ async fn jitterrun(
     );
 
     let mut node_parameters = NodeParameters::default().with_pevm_workload_type(workload_type);
-    node_parameters.network_jitter_simulation = network_jitter_simulation_para;
+    node_parameters.network_jitter_simulation = Some(network_jitter_simulation_para);
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("jitterrun-validator-{authority}"));

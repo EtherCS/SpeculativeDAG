@@ -128,7 +128,22 @@ where
             .ok()
     }
 
-    pub async fn disseminate_own_blocks(
+    pub async fn disseminate_own_blocks(&mut self, round: RoundNumber) {
+        if let Some(existing) = self.own_blocks.take() {
+            existing.abort();
+            existing.await.ok();
+        }
+
+        let handle = Handle::current().spawn(Self::stream_own_blocks(
+            self.sender.clone(),
+            self.inner.clone(),
+            round,
+            self.parameters.batch_size,
+        ));
+        self.own_blocks = Some(handle);
+    }
+
+    pub async fn disseminate_own_blocks_under_network_jitter(
         &mut self,
         round: RoundNumber,
         njs_paras: NetworkJitterSimulation,
@@ -140,7 +155,7 @@ where
             existing.await.ok();
         }
 
-        let handle = Handle::current().spawn(Self::stream_own_blocks(
+        let handle = Handle::current().spawn(Self::stream_own_blocks_under_network_jitter(
             self.sender.clone(),
             self.inner.clone(),
             round,
@@ -153,6 +168,23 @@ where
     }
 
     async fn stream_own_blocks(
+        to: mpsc::Sender<NetworkMessage>,
+        inner: Arc<NetworkSyncerInner<H, C>>,
+        mut round: RoundNumber,
+        batch_size: usize,
+    ) -> Option<()> {
+        loop {
+            let notified = inner.notify.notified();
+            let blocks = inner.block_store.get_own_blocks(round, batch_size);
+            for block in blocks {
+                round = block.round();
+                to.send(NetworkMessage::Block(block)).await.ok()?;
+            }
+            notified.await
+        }
+    }
+
+    async fn stream_own_blocks_under_network_jitter(
         to: mpsc::Sender<NetworkMessage>,
         inner: Arc<NetworkSyncerInner<H, C>>,
         mut round: RoundNumber,
@@ -171,6 +203,10 @@ where
                     && (start_time.elapsed() < njs_paras.jitter_duration)
                 {
                     sleep(njs_paras.network_jitter).await;
+                    tracing::debug!(
+                        "Network Jitter Simulation: Delayed sending own blocks by {:?}",
+                        njs_paras.network_jitter
+                    );
                 }
                 for block in blocks {
                     round = block.round();
