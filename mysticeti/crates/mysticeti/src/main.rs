@@ -6,13 +6,17 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 
 use clap::{command, Parser};
 use eyre::{eyre, Context, Result};
 use mysticeti_core::{
     committee::Committee,
-    config::{ClientParameters, ImportExport, NodeParameters, NodePrivateConfig, NodePublicConfig},
+    config::{
+        ClientParameters, ImportExport, NetworkJitterSimulation, NodeParameters, NodePrivateConfig,
+        NodePublicConfig,
+    },
     types::AuthorityIndex,
     validator::Validator,
 };
@@ -73,6 +77,27 @@ enum Operation {
         #[clap(long, value_name = "INT")]
         committee_size: usize,
     },
+    /// Deploy a local validator with network jitter simulation for test.
+    JitterRun {
+        /// The authority index of this node.
+        #[clap(long, value_name = "INT")]
+        authority: AuthorityIndex,
+        /// The number of authorities in the committee.
+        #[clap(long, value_name = "INT")]
+        committee_size: usize,
+        /// The number of faulty nodes to simulate.
+        #[clap(long, value_name = "INT")]
+        fault_num: usize,
+        /// The number of connections to delay.
+        #[clap(long, value_name = "INT")]
+        delay_connection_num: usize,
+        /// The amount of jitter to introduce in milliseconds.
+        #[clap(long, value_name = "INT")]
+        jitter_ms: u64,
+        /// The duration of the jitter simulation in seconds.
+        #[clap(long, value_name = "INT")]
+        duration_secs: u64,
+    },
 }
 
 #[tokio::main]
@@ -119,6 +144,24 @@ async fn main() -> Result<()> {
             authority,
             committee_size,
         } => dryrun(authority, committee_size).await?,
+        Operation::JitterRun {
+            authority,
+            committee_size,
+            fault_num,
+            delay_connection_num,
+            jitter_ms,
+            duration_secs,
+        } => {
+            jitterrun(
+                authority,
+                committee_size,
+                fault_num,
+                delay_connection_num,
+                jitter_ms,
+                duration_secs,
+            )
+            .await?;
+        }
     }
 
     Ok(())
@@ -257,6 +300,95 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryrun-validator-{authority}"));
+    let account_storage_path = PathBuf::from(format!(
+        "storage_{}_{}_{}.json",
+        num_clusters, num_families_per_cluster, num_people_per_family
+    ));
+    let account_addresses_path = PathBuf::from(format!(
+        "account_addresses_{}_{}_{}.bin",
+        num_clusters, num_families_per_cluster, num_people_per_family
+    ));
+
+    let mut all_private_config = NodePrivateConfig::new_for_benchmarks(
+        &working_dir,
+        committee_size,
+        account_storage_path,
+        account_addresses_path,
+    );
+    let private_config = all_private_config.remove(authority as usize);
+    match fs::remove_dir_all(&working_dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).wrap_err(format!(
+                "Failed to remove directory '{}'",
+                working_dir.display()
+            ))
+        }
+    }
+    match fs::create_dir_all(&private_config.storage_path) {
+        Ok(_) => {}
+        Err(e) => {
+            return Err(e).wrap_err(format!(
+                "Failed to create directory '{}'",
+                working_dir.display()
+            ))
+        }
+    }
+
+    let validator = Validator::start(
+        authority,
+        committee,
+        public_config,
+        private_config,
+        client_parameters,
+    )
+    .await?;
+    let (network_result, _metrics_result) = validator.await_completion().await;
+    network_result.expect("Validator crashed");
+
+    Ok(())
+}
+
+async fn jitterrun(
+    authority: AuthorityIndex,
+    committee_size: usize,
+    fault_num: usize,
+    delay_connection_num: usize,
+    jitter_ms: u64,
+    duration_secs: u64,
+) -> Result<()> {
+    tracing::warn!(
+        "Starting validator {authority} in net jitter simulation mode (committee size: {committee_size}, fault num: {fault_num}, jitter ms: {jitter_ms}, duration secs: {duration_secs})"
+    );
+    let num_clusters = 5;
+    let num_families_per_cluster = 5;
+    let num_people_per_family = 8;
+    let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
+    let committee = Committee::new_for_benchmarks(committee_size);
+    let client_parameters = ClientParameters::default();
+    let workload_type = pevm::api::WorkloadType::ERC20(
+        num_clusters,
+        num_families_per_cluster,
+        num_people_per_family,
+    );
+
+    // Set up network jitter simulation parameters
+    let jitter_delay = Duration::from_millis(jitter_ms);
+    let jitter_duration = Duration::from_secs(duration_secs);
+    let network_jitter_simulation_para = NetworkJitterSimulation::new(
+        committee_size,
+        fault_num,
+        delay_connection_num,
+        jitter_delay,
+        jitter_duration,
+    );
+
+    let mut node_parameters = NodeParameters::default().with_pevm_workload_type(workload_type);
+    node_parameters.network_jitter_simulation = network_jitter_simulation_para;
+    let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
+
+    let working_dir = PathBuf::from(format!("jitterrun-validator-{authority}"));
     let account_storage_path = PathBuf::from(format!(
         "storage_{}_{}_{}.json",
         num_clusters, num_families_per_cluster, num_people_per_family
