@@ -19,8 +19,8 @@ done
 sleep ${DURATION}
 
 # report the metrics
-curl http://0.0.0.0:$(1500 + ${COMMITTEE_SIZE} + 1)/metrics > ./log0.txt
-curl http://0.0.0.0:$(1500 + ${COMMITTEE_SIZE} + 2)/metrics > ./log1.txt
+curl http://0.0.0.0:$((1500 + COMMITTEE_SIZE + 1))/metrics > ./log0.txt
+curl http://0.0.0.0:$((1500 + COMMITTEE_SIZE + 2))/metrics > ./log1.txt
 
 echo "Stopping validators..."
 tmux kill-server
