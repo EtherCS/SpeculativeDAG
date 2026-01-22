@@ -7,14 +7,13 @@ use pevm::api::{PevmExecutor, TransactionWithHint};
 
 use crate::{
     consensus::linearizer::CommittedSubDag,
-    data::Data,
     metrics::Metrics,
     node_reputation::NodeReputation,
     runtime::{self},
     transactions_generator::TransactionGenerator,
     types::{
         APSTree, BaseStatement, BlockReference, EvmStateWriteSet, LeaderPredictionStatus,
-        SpeculativeExecutionSnapshot, StatementBlock,
+        SpeculativeExecutionSnapshot,
     },
 };
 
@@ -25,9 +24,10 @@ pub enum SpeculativeMessageStatus {
     Consensus,   // This is the final consensus order
 }
 pub enum SpeculativeMessage {
-    /// (speculative order, the corresponding sub_dags)
-    SpeculativeExecuteTxs(APSTree, Vec<CommittedSubDag>, SpeculativeMessageStatus),
-    CommitLeaders(Vec<Data<StatementBlock>>), // the ordered (to-commit) leader blocks via consensus
+    /// The ordered transactions (specified in CommittedSubDag) to be executed speculatively or for consensus
+    /// SpeculativeMessageStatus indicates whether it is for speculative execution or consensus execution
+    ExecuteTxs(APSTree, Vec<CommittedSubDag>, SpeculativeMessageStatus),
+    OtherMessage, // todo: may add other types of messages later
 }
 
 pub struct SpeculativeExecutor {
@@ -38,10 +38,8 @@ pub struct SpeculativeExecutor {
     /// The maintained speculative execution snapshots
     pub snapshots: Vec<SpeculativeExecutionSnapshot>,
     /// The sliding window of recent snapshots for commitment
+    /// The last element will serve as the last executed speculative snapshot
     pub snapshot_window: VecDeque<SpeculativeExecutionSnapshot>,
-    /// The last executed speculative execution snapshot (i.e., the currently speculative states)
-    /// This is used to prevent state overwriting issue, allowing nodes to commit the relevant speculative results upon consensus
-    pub last_executed_snapshot: SpeculativeExecutionSnapshot,
     /// The node reputation tracker
     pub node_reputation: NodeReputation,
     metrics: Arc<Metrics>,
@@ -66,7 +64,6 @@ impl SpeculativeExecutor {
                 speculative_message_receiver,
                 snapshots: vec![initial_snapshot.clone()], // Start with base snapshot
                 snapshot_window: VecDeque::with_capacity(SNAPSHOT_WINDOW),
-                last_executed_snapshot: initial_snapshot,
                 node_reputation,
                 metrics,
             }
@@ -80,7 +77,7 @@ impl SpeculativeExecutor {
             tokio::select! {
                 Some(speculative_message) = self.speculative_message_receiver.recv() => {
                     match speculative_message{
-                        SpeculativeMessage::SpeculativeExecuteTxs(aps_tree, sub_dags, flag) => {
+                        SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => {
                             match flag {
                                 SpeculativeMessageStatus::Speculative => {
                                     tracing::debug!("Received {} speculatively ordered blocks to execute, leaders {:?}", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
@@ -148,8 +145,8 @@ impl SpeculativeExecutor {
                             }
 
                         },
-                        SpeculativeMessage::CommitLeaders(ordered_leaders) => {
-                            tracing::debug!("Received {} committed ordered blocks to execute", ordered_leaders.len());
+                        SpeculativeMessage::OtherMessage => {
+                            // Handle other types of messages here
                         },
                     }
                 }
@@ -162,8 +159,14 @@ impl SpeculativeExecutor {
     /// take snapshots based on the node reputation
     async fn speculative_execution_on_blocks(&mut self, sub_dags: &Vec<CommittedSubDag>) {
         // execute new sub dags based on the current
-        let mut new_state = self.last_executed_snapshot.transition_states.clone();
-        let mut new_ordered_leaders = self.last_executed_snapshot.ordered_leaders.clone();
+        let last_executed_snapshot = self.snapshot_window.back().cloned().unwrap_or_else(|| {
+            SpeculativeExecutionSnapshot::new(
+                Vec::new(),                  // No leaders yet
+                EvmStateWriteSet::default(), // Empty initial state
+            )
+        });
+        let mut new_state = last_executed_snapshot.transition_states.clone();
+        let mut new_ordered_leaders = last_executed_snapshot.ordered_leaders.clone();
 
         // Clone executor Arc once outside the loop
         let executor = Arc::clone(&self.pevm_executor);
@@ -398,18 +401,22 @@ impl SpeculativeExecutor {
                 // The committed leaders are a full prefix of this snapshot; drop that prefix
                 snapshot.ordered_leaders.drain(..prefix_len);
                 updated.push(snapshot);
-            } else {
-                // Prefix is inconsistent with the commit; discard this snapshot
-                tracing::debug!(
-                    "Dropping snapshot with fully committed leaders or with inconsistent prefix (snapshot_len={}, common_prefix_len={}, committed_len={})",
-                    snapshot.ordered_leaders.len(),
-                    prefix_len,
-                    committed_leaders.len()
-                );
             }
         }
 
         self.snapshots = updated;
+
+        // Also update the snapshot window
+        let mut updated_window = VecDeque::with_capacity(self.snapshot_window.len());
+        for mut snapshot in self.snapshot_window.drain(..) {
+            let prefix_len = common_prefix_length(&snapshot.ordered_leaders, committed_leaders);
+            if prefix_len == committed_leaders.len() {
+                // The committed leaders are a full prefix of this snapshot; drop that prefix
+                snapshot.ordered_leaders.drain(..prefix_len);
+                updated_window.push_back(snapshot);
+            }
+        }
+        self.snapshot_window = updated_window;
     }
 }
 
