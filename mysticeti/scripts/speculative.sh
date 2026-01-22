@@ -4,7 +4,7 @@
 COMMITTEE_SIZE=${1:-4}
 DURATION=${2:-15}  # Run duration in seconds
 
-cargo build
+cargo build 2>&1 >/dev/null | tail -n 10
 
 export RUST_LOG=warn,mysticeti_core::consensus=debug,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::validator=DEBUG,mysticeti_core::transactions_generator=INFO,mysticeti_core::executor=INFO,pevm=INFO,mysticeti_core::speculative_executor=DEBUG,mysticeti_core::block_handler=INFO,
 
@@ -19,8 +19,8 @@ done
 sleep ${DURATION}
 
 # report the metrics
-curl http://0.0.0.0:1504/metrics > ./log0.txt
-curl http://0.0.0.0:1505/metrics > ./log1.txt
+curl http://0.0.0.0:$((1500 + COMMITTEE_SIZE + 1))/metrics > ./log0.txt
+curl http://0.0.0.0:$((1500 + COMMITTEE_SIZE + 2))/metrics > ./log1.txt
 
 echo "Stopping validators..."
 tmux kill-server

@@ -280,20 +280,31 @@ impl<H: BlockHandler> Core<H> {
                         .filter_map(|p| p.leader_block.clone())
                         .collect();
 
-                    let speculative_subdags = self
+                    let new_speculative_subdags = self
                         .speculative_linearizer
                         .handle_commit(&self.block_store, speculative_leaders.clone());
-                    self.aps_tree_sub_dags.extend(speculative_subdags);
-                    // we send the speculatively ordered blocks to the speculative executor for execution
-                    self.speculative_message_sender
-                        .try_send(SpeculativeMessage::SpeculativeExecuteTxs(
-                            self.aps_tree.clone(),
-                            self.aps_tree_sub_dags.clone(),
-                            SpeculativeMessageStatus::Speculative,
-                        ))
-                        .expect(
-                            "Failed to send speculative ordered blocks to speculative executor",
-                        );
+
+                    if !new_speculative_subdags.is_empty() {
+                        self.aps_tree_sub_dags
+                            .extend(new_speculative_subdags.clone());
+                        // we only send new sub dags to reduce message size
+                        // this is feasible since the channel has FIFO property
+                        match self.speculative_message_sender.try_send(
+                            SpeculativeMessage::SpeculativeExecuteTxs(
+                                self.aps_tree.clone(),
+                                new_speculative_subdags,
+                                SpeculativeMessageStatus::Speculative,
+                            ),
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Speculative message channel full or closed, skipping: {:?}",
+                                    e
+                                );
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Failed to add leader predictions to APS tree: {}", e);
