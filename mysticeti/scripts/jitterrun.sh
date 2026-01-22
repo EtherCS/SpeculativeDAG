@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Configuration
-DURATION=${1:-30}  # Run duration in seconds
-COMMITTEE_SIZE=${2:-4}  # Number of validators
+DURATION=${1:-90}  # Run duration in seconds
+COMMITTEE_SIZE=${2:-7}  # Number of validators
 FAULT_NUM=${3:-1}   # Number of jitter nodes
-DELAY_CONNECTION_NUM=${4:-2} # Number of connections to delay per jitter node
-JITTER_MS=${5:-100} # Jitter delay in milliseconds
-DURATION_SECS=${6:-15} # Jitter duration in seconds
+DELAY_CONNECTION_NUM=${4:-4} # Number of connections to delay per jitter node
+JITTER_MS=${5:-2500} # Jitter delay in milliseconds
+DURATION_SECS=${6:-50} # Jitter duration in seconds
 
 cargo build 2>&1 >/dev/null | tail -n 10
 
@@ -23,8 +23,8 @@ done
 sleep ${DURATION}
 
 # report the metrics
-curl http://0.0.0.0:1504/metrics > ./log0.txt
-curl http://0.0.0.0:1505/metrics > ./log1.txt
+curl http://0.0.0.0:$((1500 + COMMITTEE_SIZE + 1))/metrics > ./log0.txt
+curl http://0.0.0.0:$((1500 + COMMITTEE_SIZE + 2))/metrics > ./log1.txt
 
 echo "Stopping validators..."
 tmux kill-server
