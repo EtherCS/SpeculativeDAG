@@ -7,14 +7,13 @@ use pevm::api::{PevmExecutor, TransactionWithHint};
 
 use crate::{
     consensus::linearizer::CommittedSubDag,
-    data::Data,
     metrics::Metrics,
     node_reputation::NodeReputation,
     runtime::{self},
     transactions_generator::TransactionGenerator,
     types::{
         APSTree, BaseStatement, BlockReference, EvmStateWriteSet, LeaderPredictionStatus,
-        SpeculativeExecutionSnapshot, StatementBlock,
+        SpeculativeExecutionSnapshot,
     },
 };
 
@@ -25,9 +24,10 @@ pub enum SpeculativeMessageStatus {
     Consensus,   // This is the final consensus order
 }
 pub enum SpeculativeMessage {
-    /// (speculative order, the corresponding sub_dags)
-    SpeculativeExecuteTxs(APSTree, Vec<CommittedSubDag>, SpeculativeMessageStatus),
-    CommitLeaders(Vec<Data<StatementBlock>>), // the ordered (to-commit) leader blocks via consensus
+    /// The ordered transactions (specified in CommittedSubDag) to be executed speculatively or for consensus
+    /// SpeculativeMessageStatus indicates whether it is for speculative execution or consensus execution
+    ExecuteTxs(APSTree, Vec<CommittedSubDag>, SpeculativeMessageStatus),
+    OtherMessage, // todo: may add other types of messages later
 }
 
 pub struct SpeculativeExecutor {
@@ -77,7 +77,7 @@ impl SpeculativeExecutor {
             tokio::select! {
                 Some(speculative_message) = self.speculative_message_receiver.recv() => {
                     match speculative_message{
-                        SpeculativeMessage::SpeculativeExecuteTxs(aps_tree, sub_dags, flag) => {
+                        SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => {
                             match flag {
                                 SpeculativeMessageStatus::Speculative => {
                                     tracing::debug!("Received {} speculatively ordered blocks to execute, leaders {:?}", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
@@ -145,8 +145,8 @@ impl SpeculativeExecutor {
                             }
 
                         },
-                        SpeculativeMessage::CommitLeaders(ordered_leaders) => {
-                            tracing::debug!("Received {} committed ordered blocks to execute", ordered_leaders.len());
+                        SpeculativeMessage::OtherMessage => {
+                            // Handle other types of messages here
                         },
                     }
                 }
@@ -401,14 +401,6 @@ impl SpeculativeExecutor {
                 // The committed leaders are a full prefix of this snapshot; drop that prefix
                 snapshot.ordered_leaders.drain(..prefix_len);
                 updated.push(snapshot);
-            } else {
-                // Prefix is inconsistent with the commit; discard this snapshot
-                tracing::debug!(
-                    "Dropping snapshot with fully committed leaders or with inconsistent prefix (snapshot_len={}, common_prefix_len={}, committed_len={})",
-                    snapshot.ordered_leaders.len(),
-                    prefix_len,
-                    committed_leaders.len()
-                );
             }
         }
 
@@ -422,14 +414,6 @@ impl SpeculativeExecutor {
                 // The committed leaders are a full prefix of this snapshot; drop that prefix
                 snapshot.ordered_leaders.drain(..prefix_len);
                 updated_window.push_back(snapshot);
-            } else {
-                // Prefix is inconsistent with the commit; discard this snapshot
-                tracing::debug!(
-                    "Dropping snapshot in window with fully committed leaders or with inconsistent prefix (snapshot_len={}, common_prefix_len={}, committed_len={})",
-                    snapshot.ordered_leaders.len(),
-                    prefix_len,
-                    committed_leaders.len()
-                );
             }
         }
         self.snapshot_window = updated_window;
