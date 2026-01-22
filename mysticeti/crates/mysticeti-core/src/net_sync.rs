@@ -121,6 +121,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             shutdown_grace_period,
             block_fetcher,
             metrics.clone(),
+            authority_index,
             network_jitter_simulation_parameters,
             is_network_jitter_node,
         ));
@@ -151,6 +152,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         shutdown_grace_period: Duration,
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
+        authority_index: AuthorityIndex, // our own authority index (id)
         network_jitter_simulation_parameters: NetworkJitterSimulation,
         is_network_jitter_node: bool,
     ) {
@@ -186,6 +188,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 block_fetcher.clone(),
                 metrics.clone(),
                 network_jitter_simulation_parameters.clone(),
+                authority_index,
                 is_network_jitter_node,
                 delay_connection_authorities.contains(&authority),
             ));
@@ -209,6 +212,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
         network_jitter_simulation_parameters: NetworkJitterSimulation,
+        authority_index: AuthorityIndex,
         is_network_jitter_node: bool,
         is_delay_connection: bool,
     ) -> Option<()> {
@@ -239,6 +243,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                         disseminator
                             .disseminate_own_blocks_under_network_jitter(
                                 round,
+                                authority_index,
                                 network_jitter_simulation_parameters.clone(),
                                 is_network_jitter_node,
                                 is_delay_connection,

@@ -146,6 +146,7 @@ where
     pub async fn disseminate_own_blocks_under_network_jitter(
         &mut self,
         round: RoundNumber,
+        author: AuthorityIndex, // the authority of ourselves
         njs_paras: NetworkJitterSimulation,
         is_network_jitter_node: bool,
         is_delay_connection: bool,
@@ -160,6 +161,7 @@ where
             self.inner.clone(),
             round,
             self.parameters.batch_size,
+            author,
             njs_paras,
             is_network_jitter_node,
             is_delay_connection,
@@ -189,27 +191,32 @@ where
         inner: Arc<NetworkSyncerInner<H, C>>,
         mut round: RoundNumber,
         batch_size: usize,
+        author: AuthorityIndex,
         njs_paras: NetworkJitterSimulation,
         is_network_jitter_node: bool,
         is_delay_connection: bool,
     ) -> Option<()> {
         let start_time = Instant::now();
         loop {
+            let committee_size = njs_paras.committee_size;
             let notified = inner.notify.notified();
             let blocks = inner.block_store.get_own_blocks(round, batch_size);
             if !blocks.is_empty() {
-                if is_network_jitter_node
-                    && is_delay_connection
-                    && (start_time.elapsed() < njs_paras.jitter_duration)
-                {
-                    sleep(njs_paras.network_jitter).await;
-                    tracing::debug!(
-                        "Network Jitter Simulation: Delayed sending own blocks by {:?}",
-                        njs_paras.network_jitter
-                    );
-                }
                 for block in blocks {
                     round = block.round();
+                    if is_network_jitter_node
+                        && is_delay_connection
+                        && (start_time.elapsed() < njs_paras.jitter_duration)
+                        && round % committee_size as u64 == author
+                    // only delay sending the leader block
+                    {
+                        sleep(njs_paras.network_jitter).await;
+                        tracing::debug!(
+                            "Network Jitter Simulation: Delayed sending own blocks by {:?}",
+                            njs_paras.network_jitter
+                        );
+                    }
+
                     to.send(NetworkMessage::Block(block)).await.ok()?;
                 }
             }
