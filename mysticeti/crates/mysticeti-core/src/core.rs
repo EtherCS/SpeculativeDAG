@@ -290,7 +290,7 @@ impl<H: BlockHandler> Core<H> {
                         // we only send new sub dags to reduce message size
                         // this is feasible since the channel has FIFO property
                         match self.speculative_message_sender.try_send(
-                            SpeculativeMessage::SpeculativeExecuteTxs(
+                            SpeculativeMessage::ExecuteTxs(
                                 self.aps_tree.clone(),
                                 new_speculative_subdags,
                                 SpeculativeMessageStatus::Speculative,
@@ -539,7 +539,7 @@ impl<H: BlockHandler> Core<H> {
             self.check_speculative_consensus_consistency(&committed);
         // send the final consensus order to speculative executor for commitment
         self.speculative_message_sender
-            .try_send(SpeculativeMessage::SpeculativeExecuteTxs(
+            .try_send(SpeculativeMessage::ExecuteTxs(
                 self.aps_tree.clone(),
                 committed.clone(),
                 SpeculativeMessageStatus::Consensus,
