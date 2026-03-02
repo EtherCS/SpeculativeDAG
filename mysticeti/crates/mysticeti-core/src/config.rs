@@ -391,7 +391,10 @@ pub struct NetworkJitterSimulation {
     /// The network delay added to connections, used to simulate unstable network conditions.
     #[serde(default = "network_jitter_defaults::default_network_jitter")]
     pub network_jitter: Duration,
-    /// The round after which the network is considered stable (i.e., not network jitter).
+    /// The initial delay before starting to apply network jitter.
+    #[serde(default = "network_jitter_defaults::default_start_time")]
+    pub start_time: Duration,
+    /// The jitter duration, after which the network is considered stable (i.e., not network jitter).
     #[serde(default = "network_jitter_defaults::default_jitter_duration")]
     pub jitter_duration: Duration,
 }
@@ -414,6 +417,10 @@ pub mod network_jitter_defaults {
         std::time::Duration::from_millis(100)
     }
 
+    pub fn default_start_time() -> super::Duration {
+        std::time::Duration::from_secs(5)
+    }
+
     pub fn default_jitter_duration() -> super::Duration {
         std::time::Duration::from_secs(10)
     }
@@ -425,6 +432,7 @@ impl NetworkJitterSimulation {
         fault_num: usize,
         delay_connection_num: usize,
         network_jitter: Duration,
+        start_time: Duration,
         jitter_duration: Duration,
     ) -> Self {
         Self {
@@ -433,6 +441,7 @@ impl NetworkJitterSimulation {
             delay_connection_num,
             network_jitter,
             jitter_duration,
+            start_time,
         }
     }
 }
@@ -444,6 +453,7 @@ impl Default for NetworkJitterSimulation {
             fault_num: network_jitter_defaults::default_fault_num(),
             delay_connection_num: network_jitter_defaults::default_delay_connection_num(),
             network_jitter: network_jitter_defaults::default_network_jitter(),
+            start_time: network_jitter_defaults::default_start_time(),
             jitter_duration: network_jitter_defaults::default_jitter_duration(),
         }
     }

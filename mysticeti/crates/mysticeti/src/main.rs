@@ -94,6 +94,9 @@ enum Operation {
         /// The amount of jitter to introduce in milliseconds.
         #[clap(long, value_name = "INT")]
         jitter_ms: u64,
+        /// The start time of the jitter simulation in seconds.
+        #[clap(long, value_name = "INT")]
+        start_time: u64,
         /// The duration of the jitter simulation in seconds.
         #[clap(long, value_name = "INT")]
         duration_secs: u64,
@@ -150,6 +153,7 @@ async fn main() -> Result<()> {
             fault_num,
             delay_connection_num,
             jitter_ms,
+            start_time,
             duration_secs,
         } => {
             jitterrun(
@@ -158,6 +162,7 @@ async fn main() -> Result<()> {
                 fault_num,
                 delay_connection_num,
                 jitter_ms,
+                start_time,
                 duration_secs,
             )
             .await?;
@@ -356,6 +361,7 @@ async fn jitterrun(
     fault_num: usize,
     delay_connection_num: usize,
     jitter_ms: u64,
+    start_time: u64,
     duration_secs: u64,
 ) -> Result<()> {
     tracing::warn!(
@@ -375,12 +381,14 @@ async fn jitterrun(
 
     // Set up network jitter simulation parameters
     let jitter_delay = Duration::from_millis(jitter_ms);
+    let start_time = Duration::from_secs(start_time);
     let jitter_duration = Duration::from_secs(duration_secs);
     let network_jitter_simulation_para = NetworkJitterSimulation::new(
         committee_size,
         fault_num,
         delay_connection_num,
         jitter_delay,
+        start_time,
         jitter_duration,
     );
 

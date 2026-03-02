@@ -10,6 +10,8 @@ leader_timeout:
 #   network_jitter: 
 #     secs: 0
 #     nanos: 100000000 # in nanoseconds, 100 ms by default
+#   start_time:
+#     secs: 10 # in seconds, the time to start the jitter simulation
 #   jitter_duration: 
 #     secs: 50 # in seconds
 #     nanos: 0

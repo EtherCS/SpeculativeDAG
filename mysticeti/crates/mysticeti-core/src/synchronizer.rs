@@ -206,6 +206,7 @@ where
                     round = block.round();
                     if is_network_jitter_node
                         && is_delay_connection
+                        && (start_time.elapsed() >= njs_paras.start_time)
                         && (start_time.elapsed() < njs_paras.jitter_duration)
                         && round % committee_size as u64 == author
                     // only delay sending the leader block
