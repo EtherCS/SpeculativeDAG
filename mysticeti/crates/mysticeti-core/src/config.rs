@@ -351,7 +351,7 @@ mod client_defaults {
     use super::Duration;
 
     pub fn default_load() -> usize {
-        200
+        10
     }
 
     pub fn default_transaction_size() -> usize {
@@ -359,7 +359,7 @@ mod client_defaults {
     }
 
     pub fn default_initial_delay() -> Duration {
-        Duration::from_secs(1)
+        Duration::from_secs(5)
     }
 }
 

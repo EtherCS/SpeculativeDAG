@@ -60,7 +60,14 @@ impl Validator {
 
         // Boot the prometheus server.
         let registry = Registry::new();
-        let (metrics, reporter) = Metrics::new(&registry, Some(&committee));
+        let (metrics, mut reporter) = Metrics::new(&registry, Some(&committee));
+        reporter.csv_output_path = Some(
+            private_config
+                .storage_path
+                .join("latency.csv")
+                .to_string_lossy()
+                .into_owned(),
+        );
         reporter.start();
 
         let metrics_handle =

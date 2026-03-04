@@ -82,6 +82,7 @@ pub struct Metrics {
 pub struct MetricReporter {
     // When adding field here make sure to update
     // MetricsReporter::receive_all and MetricsReporter::run_report.
+    pub csv_output_path: Option<String>,
     pub transaction_certified_latency: HistogramReporter<Duration>,
     pub certificate_committed_latency: HistogramReporter<Duration>,
     pub transaction_committed_latency: HistogramReporter<Duration>,
@@ -134,6 +135,7 @@ impl Metrics {
             })
             .unzip();
         let reporter = MetricReporter {
+            csv_output_path: None,
             transaction_certified_latency: HistogramReporter::new_in_registry(
                 transaction_certified_latency_hist,
                 registry,
@@ -378,7 +380,7 @@ impl<T: Ord + AddAssign + DivUsize + Copy + Default + AsPrometheusMetric> Histog
         Self { histogram, gauge }
     }
 
-    pub fn report(&mut self) -> Option<()> {
+    pub fn report(&mut self) -> Option<[T; 3]> {
         let [p50, p90, p99] = self.histogram.pcts([500, 900, 990])?;
         self.gauge
             .with_label_values(&["p50"])
@@ -395,7 +397,7 @@ impl<T: Ord + AddAssign + DivUsize + Copy + Default + AsPrometheusMetric> Histog
         self.gauge
             .with_label_values(&["count"])
             .set(self.histogram.total_count() as i64);
-        None
+        Some([p50, p90, p99])
     }
 
     pub fn clear_receive_all(&mut self) {
@@ -479,16 +481,32 @@ impl MetricReporter {
 
     // todo - this task never stops
     async fn run(mut self) {
-        const REPORT_INTERVAL: Duration = Duration::from_secs(60);
+        const REPORT_INTERVAL: Duration = Duration::from_secs(1);
+        let start_time = std::time::Instant::now();
+        let mut csv_writer: Option<std::io::BufWriter<std::fs::File>> =
+            if let Some(ref path) = self.csv_output_path {
+                use std::io::Write;
+                let file = std::fs::File::create(path).expect("Failed to create latency CSV");
+                let mut w = std::io::BufWriter::new(file);
+                writeln!(w, "elapsed_secs,p50_ms,p90_ms,p99_ms").ok();
+                w.flush().ok();
+                Some(w)
+            } else {
+                None
+            };
         let mut deadline = Instant::now();
         loop {
             deadline += REPORT_INTERVAL;
             tokio::time::sleep_until(deadline).await;
-            self.run_report().await;
+            self.run_report(start_time, &mut csv_writer).await;
         }
     }
 
-    async fn run_report(&mut self) {
+    async fn run_report(
+        &mut self,
+        start_time: std::time::Instant,
+        csv_writer: &mut Option<std::io::BufWriter<std::fs::File>>,
+    ) {
         self.global_in_memory_blocks
             .set(IN_MEMORY_BLOCKS.load(Ordering::Relaxed) as i64);
         self.global_in_memory_blocks_bytes
@@ -498,7 +516,7 @@ impl MetricReporter {
 
         self.transaction_certified_latency.report();
         self.certificate_committed_latency.report();
-        self.transaction_committed_latency.report();
+        let tx_committed_pcts = self.transaction_committed_latency.report();
         self.block_execution_latency.report();
         self.block_consensus_latency.report();
 
@@ -507,6 +525,24 @@ impl MetricReporter {
         self.proposed_block_vote_count.report();
 
         self.connection_latency.report();
+
+        // Write transaction committed latency percentiles to CSV
+        if let (Some([p50, p90, p99]), Some(ref mut csv)) =
+            (tx_committed_pcts, csv_writer.as_mut())
+        {
+            use std::io::Write;
+            let elapsed_secs = start_time.elapsed().as_secs_f64();
+            writeln!(
+                csv,
+                "{:.1},{},{},{}",
+                elapsed_secs,
+                p50.as_millis(),
+                p90.as_millis(),
+                p99.as_millis()
+            )
+            .ok();
+            csv.flush().ok();
+        }
     }
 }
 
