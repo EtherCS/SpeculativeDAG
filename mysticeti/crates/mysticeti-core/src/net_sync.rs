@@ -20,11 +20,11 @@ use crate::{
     block_handler::BlockHandler,
     block_store::BlockStore,
     committee::Committee,
-    config::NodePublicConfig,
+    config::{NetworkJitterSimulation, NodePublicConfig},
     core::Core,
     core_thread::CoreThreadDispatcher,
     metrics::Metrics,
-    network::{Connection, Network, NetworkMessage},
+    network::{self, Connection, Network, NetworkMessage},
     runtime::{self, timestamp_utc, Handle, JoinError, JoinHandle},
     syncer::{CommitObserver, Syncer, SyncerSignals},
     synchronizer::{BlockDisseminator, BlockFetcher, SynchronizerParameters},
@@ -100,6 +100,20 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             metrics.clone(),
             public_config.parameters.enable_synchronizer,
         ));
+
+        // By default, we consider the last js_paras.fault_num are fault
+        let mut network_jitter_simulation_parameters = NetworkJitterSimulation::default();
+        let mut is_network_jitter_node = false;
+        if let Some(net_para) = &public_config.parameters.network_jitter_simulation {
+            network_jitter_simulation_parameters = net_para.clone();
+            is_network_jitter_node =
+                if authority_index as usize >= (net_para.committee_size - net_para.fault_num) {
+                    true
+                } else {
+                    false
+                }
+        }
+
         let main_task = handle.spawn(Self::run(
             network,
             inner.clone(),
@@ -107,6 +121,9 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             shutdown_grace_period,
             block_fetcher,
             metrics.clone(),
+            authority_index,
+            network_jitter_simulation_parameters,
+            is_network_jitter_node,
         ));
         let syncer_task = AsyncWalSyncer::start(wal_syncer, stop_sender, epoch_sender);
         Self {
@@ -135,6 +152,9 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         shutdown_grace_period: Duration,
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
+        authority_index: AuthorityIndex, // our own authority index (id)
+        network_jitter_simulation_parameters: NetworkJitterSimulation,
+        is_network_jitter_node: bool,
     ) {
         let mut connections: HashMap<usize, JoinHandle<Option<()>>> = HashMap::new();
         let handle = Handle::current();
@@ -144,6 +164,13 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             shutdown_grace_period,
         ));
         let cleanup_task = handle.spawn(Self::cleanup_task(inner.clone()));
+
+        let committee_size = network_jitter_simulation_parameters.committee_size;
+        let delay_connection_num = network_jitter_simulation_parameters.delay_connection_num;
+        // By default, we assume half of the connections will have delayed network
+        let delay_connection_authorities =
+            generate_n_random_authority_indices(delay_connection_num, committee_size);
+
         while let Some(connection) = inner.recv_or_stopped(network.connection_receiver()).await {
             let peer_id = connection.peer_id;
             if let Some(task) = connections.remove(&peer_id) {
@@ -160,6 +187,10 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
                 inner.clone(),
                 block_fetcher.clone(),
                 metrics.clone(),
+                network_jitter_simulation_parameters.clone(),
+                authority_index,
+                is_network_jitter_node,
+                delay_connection_authorities.contains(&authority),
             ));
             connections.insert(peer_id, task);
         }
@@ -180,6 +211,10 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         inner: Arc<NetworkSyncerInner<H, C>>,
         block_fetcher: Arc<BlockFetcher>,
         metrics: Arc<Metrics>,
+        network_jitter_simulation_parameters: NetworkJitterSimulation,
+        authority_index: AuthorityIndex,
+        is_network_jitter_node: bool,
+        is_delay_connection: bool,
     ) -> Option<()> {
         let last_seen = inner
             .block_store
@@ -204,7 +239,19 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         while let Some(message) = inner.recv_or_stopped(&mut connection.receiver).await {
             match message {
                 NetworkMessage::SubscribeOwnFrom(round) => {
-                    disseminator.disseminate_own_blocks(round).await
+                    if is_delay_connection {
+                        disseminator
+                            .disseminate_own_blocks_under_network_jitter(
+                                round,
+                                authority_index,
+                                network_jitter_simulation_parameters.clone(),
+                                is_network_jitter_node,
+                                is_delay_connection,
+                            )
+                            .await;
+                    } else {
+                        disseminator.disseminate_own_blocks(round).await;
+                    }
                 }
                 NetworkMessage::Block(block) => {
                     tracing::debug!("Received {} from {}", block.reference(), peer);
@@ -307,6 +354,16 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
     pub async fn await_completion(self) -> Result<(), JoinError> {
         self.main_task.await
     }
+}
+
+fn generate_n_random_authority_indices(num: usize, committee_size: usize) -> Vec<AuthorityIndex> {
+    use rand::{seq::IteratorRandom, thread_rng};
+    let mut rng = thread_rng();
+    (0..committee_size)
+        .choose_multiple(&mut rng, num)
+        .into_iter()
+        .map(|i| i as AuthorityIndex)
+        .collect()
 }
 
 impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncerInner<H, C> {
@@ -454,10 +511,7 @@ mod sim_tests {
         simulator_tracing::setup_simulator_tracing,
         syncer::Syncer,
         test_util::{
-            check_commits,
-            print_stats,
-            rng_at_seed,
-            simulated_network_syncers,
+            check_commits, print_stats, rng_at_seed, simulated_network_syncers,
             simulated_network_syncers_with_epoch_duration,
         },
     };

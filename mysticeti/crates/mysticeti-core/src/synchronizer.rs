@@ -1,7 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use futures::future::join_all;
 use rand::{seq::SliceRandom, thread_rng};
@@ -9,6 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     block_handler::BlockHandler,
+    config::NetworkJitterSimulation,
     metrics::Metrics,
     net_sync::{self, NetworkSyncerInner},
     network::NetworkMessage,
@@ -138,6 +143,32 @@ where
         self.own_blocks = Some(handle);
     }
 
+    pub async fn disseminate_own_blocks_under_network_jitter(
+        &mut self,
+        round: RoundNumber,
+        author: AuthorityIndex, // the authority of ourselves
+        njs_paras: NetworkJitterSimulation,
+        is_network_jitter_node: bool,
+        is_delay_connection: bool,
+    ) {
+        if let Some(existing) = self.own_blocks.take() {
+            existing.abort();
+            existing.await.ok();
+        }
+
+        let handle = Handle::current().spawn(Self::stream_own_blocks_under_network_jitter(
+            self.sender.clone(),
+            self.inner.clone(),
+            round,
+            self.parameters.batch_size,
+            author,
+            njs_paras,
+            is_network_jitter_node,
+            is_delay_connection,
+        ));
+        self.own_blocks = Some(handle);
+    }
+
     async fn stream_own_blocks(
         to: mpsc::Sender<NetworkMessage>,
         inner: Arc<NetworkSyncerInner<H, C>>,
@@ -151,6 +182,46 @@ where
                 round = block.round();
                 to.send(NetworkMessage::Block(block)).await.ok()?;
             }
+            notified.await
+        }
+    }
+
+    async fn stream_own_blocks_under_network_jitter(
+        to: mpsc::Sender<NetworkMessage>,
+        inner: Arc<NetworkSyncerInner<H, C>>,
+        mut round: RoundNumber,
+        batch_size: usize,
+        author: AuthorityIndex,
+        njs_paras: NetworkJitterSimulation,
+        is_network_jitter_node: bool,
+        is_delay_connection: bool,
+    ) -> Option<()> {
+        let start_time = Instant::now();
+        loop {
+            let committee_size = njs_paras.committee_size;
+            let notified = inner.notify.notified();
+            let blocks = inner.block_store.get_own_blocks(round, batch_size);
+            if !blocks.is_empty() {
+                for block in blocks {
+                    round = block.round();
+                    if is_network_jitter_node
+                        && is_delay_connection
+                        && (start_time.elapsed() >= njs_paras.start_time)
+                        && (start_time.elapsed() < njs_paras.jitter_duration)
+                        && round % committee_size as u64 == author
+                    // only delay sending the leader block
+                    {
+                        sleep(njs_paras.network_jitter).await;
+                        tracing::debug!(
+                            "Network Jitter Simulation: Delayed sending own blocks by {:?}",
+                            njs_paras.network_jitter
+                        );
+                    }
+
+                    to.send(NetworkMessage::Block(block)).await.ok()?;
+                }
+            }
+
             notified.await
         }
     }
