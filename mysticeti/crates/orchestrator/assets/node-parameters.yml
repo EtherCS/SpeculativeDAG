@@ -13,5 +13,5 @@ leader_timeout:
 #   start_time:
 #     secs: 10 # in seconds, the time to start the jitter simulation
 #   jitter_duration: 
-#     secs: 50 # in seconds
+#     secs: 20 # in seconds
 #     nanos: 0
