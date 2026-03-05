@@ -2,6 +2,7 @@ mysticeti/v*.log.ansi
 mysticeti/dryrun-validator*
 mysticeti/scripts/*.txt
 mysticeti/scripts/*.pdf
+mysticeti/scripts/results/*
 mysticeti/target/*
 pevm/target/*
 pevm/crates/pevm/target/*
