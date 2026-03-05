@@ -64,7 +64,7 @@ impl Validator {
         reporter.csv_output_path = Some(
             private_config
                 .storage_path
-                .join("latency.csv")
+                .join("Pufferfish.csv")
                 .to_string_lossy()
                 .into_owned(),
         );
