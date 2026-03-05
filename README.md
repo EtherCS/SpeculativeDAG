@@ -34,8 +34,16 @@ It will run 7 nodes with 2 nodes that experiences jitter (randomly choosing 4 co
 Above is the log, showing that many leaders fail to be directly decided; instead, they are decided indirectly from C58.
 
 ## Plot the latency figure
+### Single protocol (p50, p90, p99)
 The latency data is stored in `*-validator-*/storage-*/latency.csv`, to plot the latency figure, run
 ```
 python3 plot_latency.py --csv [latency file] --output [output name]
 # E.g., python3 plot_latency.py --csv jitterrun-validator-0/storage-0/latency.csv --output jitter_latency.pdf
+```
+
+### Protocol comparison (p50, p90)
+Run
+```
+python3 plot_comparison.py [the path of all compared .csv files] [output file name]
+# E.g., python3 plot_comparison.py results/local/ comparison.pdf
 ```
