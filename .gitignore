@@ -11,3 +11,5 @@ mysticeti/logs/*
 
 **.ansi
 **-validator*
+
+mysticeti/crates/orchestrator/assets/settings.yml
