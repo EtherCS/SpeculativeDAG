@@ -129,6 +129,10 @@ pub struct Settings {
     /// to zero, the orchestrator runs a load generate collocated with each node.
     #[serde(default = "defaults::default_dedicated_clients")]
     pub dedicated_clients: usize,
+    /// The path to the account storage file for benchmarks.
+    pub account_storage_path: Option<String>,
+    /// The path to the account addresses file for benchmarks.
+    pub account_addresses_path: Option<String>,
     /// Whether to start a grafana and prometheus instance on a dedicate machine.
     #[serde(default = "defaults::default_monitoring")]
     pub monitoring: bool,

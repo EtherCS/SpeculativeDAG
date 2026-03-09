@@ -103,6 +103,10 @@ impl Validator {
         // let in_memory_storage = pevm::api::load_in_memory_storage(&workload_type);
         // let account_addresses = pevm::api::load_account_addresses(&workload_type);
 
+        if let Some(jitter_settings) = &public_config.parameters.network_jitter_simulation {
+            tracing::info!("Enabling network jitter simulation with settings: {:?}", jitter_settings);
+        }
+
         let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) =
             mpsc::channel(10000);
         let (pevm_txn_sender, pevm_txn_receiver) = mpsc::channel(10000);

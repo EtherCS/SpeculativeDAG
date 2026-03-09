@@ -1,0 +1,354 @@
+{
+  "parameters": {
+    "settings": {
+      "testbed_id": "jianting-pufferfish",
+      "cloud_provider": "Aws",
+      "ssh_public_key_file": null,
+      "regions": [
+        "us-east-1"
+      ],
+      "specs": "t3.xlarge",
+      "repository": {
+        "url": "https://github.com/EtherCS/SpeculativeDAG.git",
+        "commit": "dev-attack"
+      },
+      "node_parameters_path": "crates/orchestrator/assets/node-parameters.yml",
+      "client_parameters_path": "crates/orchestrator/assets/client-parameters.yml",
+      "network_jitter_simulation_parameters_path": null,
+      "benchmark_duration": 240,
+      "faults": {
+        "Permanent": {
+          "faults": 0
+        }
+      },
+      "working_dir": "~/working_dir",
+      "results_dir": "./results",
+      "logs_dir": "./logs",
+      "nvme": true,
+      "scrape_interval": 15,
+      "log_processing": false,
+      "dedicated_clients": 0,
+      "account_storage_path": "crates/orchestrator/assets/storage_5_5_8.json",
+      "account_addresses_path": "crates/orchestrator/assets/account_addresses_5_5_8.bin",
+      "monitoring": true,
+      "ssh_timeout": 30,
+      "ssh_retries": 3
+    },
+    "node_parameters": {
+      "wave_length": 3,
+      "leader_timeout": {
+        "secs": 1,
+        "nanos": 0
+      },
+      "max_block_size": 4194304,
+      "rounds_in_epoch": 18446744073709551615,
+      "shutdown_grace_period": {
+        "secs": 2,
+        "nanos": 0
+      },
+      "number_of_leaders": 1,
+      "enable_pipelining": true,
+      "consensus_only": true,
+      "enable_synchronizer": false,
+      "enable_pevm_executor": true,
+      "pevm_workload_type": {
+        "ERC20": [
+          5,
+          5,
+          8
+        ]
+      },
+      "reputation_threshold_deviation": 80,
+      "reputation_threshold_numerator": 2,
+      "reputation_threshold_denominator": 3,
+      "initial_score": 0,
+      "network_jitter_simulation": null
+    },
+    "client_parameters": {
+      "load": 10,
+      "transaction_size": 512,
+      "initial_delay": {
+        "secs": 30,
+        "nanos": 0
+      }
+    },
+    "nodes": 4,
+    "load": 10
+  },
+  "data": {
+    "shared": {
+      "0": [
+        {
+          "timestamp": {
+            "secs": 42,
+            "nanos": 0
+          },
+          "buckets": {
+            "2": 488,
+            "5": 488,
+            "60": 488,
+            "2.5": 488,
+            "0.75": 488,
+            "4": 488,
+            "1": 488,
+            "1.25": 488,
+            "20": 488,
+            "inf": 488,
+            "0.25": 488,
+            "3": 488,
+            "90": 488,
+            "10": 488,
+            "0.1": 488,
+            "30": 488,
+            "1.75": 488,
+            "1.5": 488,
+            "0.5": 488
+          },
+          "sum": {
+            "secs": 2,
+            "nanos": 573693483
+          },
+          "count": 488,
+          "squared_sum": 0.02423277204550296
+        },
+        {
+          "timestamp": {
+            "secs": 57,
+            "nanos": 0
+          },
+          "buckets": {
+            "0.5": 1112,
+            "1.25": 1112,
+            "2": 1112,
+            "3": 1112,
+            "2.5": 1112,
+            "10": 1112,
+            "90": 1112,
+            "5": 1112,
+            "60": 1112,
+            "4": 1112,
+            "1.75": 1112,
+            "0.75": 1112,
+            "inf": 1112,
+            "0.25": 1112,
+            "30": 1112,
+            "0.1": 1112,
+            "20": 1112,
+            "1": 1112,
+            "1.5": 1112
+          },
+          "sum": {
+            "secs": 5,
+            "nanos": 936745291
+          },
+          "count": 1112,
+          "squared_sum": 0.05162900281845151
+        }
+      ],
+      "3": [
+        {
+          "timestamp": {
+            "secs": 42,
+            "nanos": 0
+          },
+          "buckets": {
+            "2.5": 500,
+            "3": 500,
+            "5": 500,
+            "10": 500,
+            "1.75": 500,
+            "1.25": 500,
+            "2": 500,
+            "0.1": 500,
+            "1": 500,
+            "0.75": 500,
+            "inf": 500,
+            "4": 500,
+            "0.25": 500,
+            "30": 500,
+            "60": 500,
+            "90": 500,
+            "1.5": 500,
+            "0.5": 500,
+            "20": 500
+          },
+          "sum": {
+            "secs": 2,
+            "nanos": 553796096
+          },
+          "count": 500,
+          "squared_sum": 0.02020884389642113
+        },
+        {
+          "timestamp": {
+            "secs": 57,
+            "nanos": 0
+          },
+          "buckets": {
+            "inf": 1100,
+            "0.75": 1100,
+            "0.25": 1100,
+            "10": 1100,
+            "20": 1100,
+            "30": 1100,
+            "60": 1100,
+            "90": 1100,
+            "5": 1100,
+            "1": 1100,
+            "0.1": 1100,
+            "1.5": 1100,
+            "2.5": 1100,
+            "3": 1100,
+            "1.75": 1100,
+            "1.25": 1100,
+            "4": 1100,
+            "2": 1100,
+            "0.5": 1100
+          },
+          "sum": {
+            "secs": 5,
+            "nanos": 848051179
+          },
+          "count": 1100,
+          "squared_sum": 0.047693416174076006
+        }
+      ],
+      "2": [
+        {
+          "timestamp": {
+            "secs": 42,
+            "nanos": 0
+          },
+          "buckets": {
+            "5": 500,
+            "90": 500,
+            "30": 500,
+            "1.25": 500,
+            "0.25": 500,
+            "3": 500,
+            "10": 500,
+            "0.1": 500,
+            "1.5": 500,
+            "0.5": 500,
+            "inf": 500,
+            "60": 500,
+            "2.5": 500,
+            "0.75": 500,
+            "1.75": 500,
+            "20": 500,
+            "2": 500,
+            "4": 500,
+            "1": 500
+          },
+          "sum": {
+            "secs": 2,
+            "nanos": 733862816
+          },
+          "count": 500,
+          "squared_sum": 0.02403122812781639
+        },
+        {
+          "timestamp": {
+            "secs": 57,
+            "nanos": 0
+          },
+          "buckets": {
+            "0.75": 1100,
+            "3": 1100,
+            "0.5": 1100,
+            "90": 1100,
+            "0.1": 1100,
+            "20": 1100,
+            "30": 1100,
+            "4": 1100,
+            "2.5": 1100,
+            "1.75": 1100,
+            "10": 1100,
+            "0.25": 1100,
+            "1": 1100,
+            "1.25": 1100,
+            "2": 1100,
+            "5": 1100,
+            "1.5": 1100,
+            "60": 1100,
+            "inf": 1100
+          },
+          "sum": {
+            "secs": 6,
+            "nanos": 343107020
+          },
+          "count": 1100,
+          "squared_sum": 0.05796154140741202
+        }
+      ],
+      "1": [
+        {
+          "timestamp": {
+            "secs": 42,
+            "nanos": 0
+          },
+          "buckets": {
+            "90": 500,
+            "0.25": 500,
+            "4": 500,
+            "60": 500,
+            "20": 500,
+            "1.25": 500,
+            "1.5": 500,
+            "1.75": 500,
+            "3": 500,
+            "0.5": 500,
+            "1": 500,
+            "0.1": 500,
+            "5": 500,
+            "10": 500,
+            "inf": 500,
+            "0.75": 500,
+            "30": 500,
+            "2": 500,
+            "2.5": 500
+          },
+          "sum": {
+            "secs": 2,
+            "nanos": 654203209
+          },
+          "count": 500,
+          "squared_sum": 0.02218645338665673
+        },
+        {
+          "timestamp": {
+            "secs": 57,
+            "nanos": 0
+          },
+          "buckets": {
+            "4": 1120,
+            "inf": 1120,
+            "20": 1120,
+            "3": 1120,
+            "5": 1120,
+            "0.5": 1120,
+            "1.25": 1120,
+            "2": 1120,
+            "1": 1120,
+            "2.5": 1120,
+            "10": 1120,
+            "1.5": 1120,
+            "1.75": 1120,
+            "30": 1120,
+            "60": 1120,
+            "0.1": 1120,
+            "0.75": 1120,
+            "0.25": 1120,
+            "90": 1120
+          },
+          "sum": {
+            "secs": 6,
+            "nanos": 73072714
+          },
+          "count": 1120,
+          "squared_sum": 0.0514530603017469
+        }
+      ]
+    }
+  }
+}
