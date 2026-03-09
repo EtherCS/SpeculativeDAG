@@ -242,7 +242,6 @@ async fn run(
     private_config_path: String,
     client_parameters_path: String,
 ) -> Result<()> {
-    tracing::info!("Starting validator {authority}");
 
     let committee = Committee::load(&committee_path)
         .wrap_err(format!("Failed to load committee file '{committee_path}'"))?;
@@ -255,6 +254,12 @@ async fn run(
     let client_parameters = ClientParameters::load(&client_parameters_path).wrap_err(format!(
         "Failed to load client parameters file '{client_parameters_path}'"
     ))?;
+
+    if let Some(jitter_settings) = &public_config.parameters.network_jitter_simulation {
+        tracing::info!("Starting validator {} in net jitter simulation mode (committee size: {}, fault num: {}, jitter ms: {}, start_delay: {}, duration secs: {})", authority, jitter_settings.committee_size, jitter_settings.fault_num, jitter_settings.network_jitter.as_secs(), jitter_settings.start_time.as_secs(), jitter_settings.jitter_duration.as_secs());
+    } else {
+        tracing::info!("Starting validator {authority} without network jitter simulation");
+    }
 
     let committee = Arc::new(committee);
 

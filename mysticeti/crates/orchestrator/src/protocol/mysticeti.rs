@@ -79,6 +79,8 @@ impl ProtocolParameters for MysticetiClientParameters {}
 
 pub struct MysticetiProtocol {
     working_dir: PathBuf,
+    account_storage_path: String,
+    account_addresses_path: String,
 }
 
 impl ProtocolCommands for MysticetiProtocol {
@@ -120,9 +122,11 @@ impl ProtocolCommands for MysticetiProtocol {
             &format!("./{BINARY_PATH}/mysticeti"),
             "benchmark-genesis",
             &format!(
-                "--ips {ips} --working-directory {} --node-parameters-path {}",
+                "--ips {ips} --working-directory {} --node-parameters-path {} --account-storage-path {} --account-addresses-path {}",
                 self.working_dir.display(),
                 node_parameters_path.display(),
+                self.account_storage_path,
+                self.account_addresses_path,
             ),
         ]
         .join(" ");
@@ -237,6 +241,14 @@ impl MysticetiProtocol {
     pub fn new(settings: &Settings) -> Self {
         Self {
             working_dir: settings.working_dir.clone(),
+            account_storage_path: settings
+                .account_storage_path
+                .clone()
+                .unwrap_or_else(|| "storage_5_5_8.json".to_string()),
+            account_addresses_path: settings
+                .account_addresses_path
+                .clone()
+                .unwrap_or_else(|| "account_addresses_5_5_8.bin".to_string()),
         }
     }
 }
