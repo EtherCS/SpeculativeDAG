@@ -481,7 +481,7 @@ impl MetricReporter {
 
     // todo - this task never stops
     async fn run(mut self) {
-        const REPORT_INTERVAL: Duration = Duration::from_secs(1);
+        const REPORT_INTERVAL: Duration = Duration::from_secs(5);
         let start_time = std::time::Instant::now();
         let mut csv_writer: Option<std::io::BufWriter<std::fs::File>> =
             if let Some(ref path) = self.csv_output_path {
