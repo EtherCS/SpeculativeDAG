@@ -106,12 +106,11 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         let mut is_network_jitter_node = false;
         if let Some(net_para) = &public_config.parameters.network_jitter_simulation {
             network_jitter_simulation_parameters = net_para.clone();
-            is_network_jitter_node =
-                if authority_index as usize >= (net_para.committee_size - net_para.fault_num) {
-                    true
-                } else {
-                    false
-                }
+            let jitter_node_indices = generate_n_random_authority_indices(
+                net_para.fault_num,
+                net_para.committee_size,
+            );
+            is_network_jitter_node = jitter_node_indices.contains(&authority_index);
         }
 
         let main_task = handle.spawn(Self::run(

@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-const SNAPSHOT_WINDOW: usize = 10; // the maximum number of temporary snapshots
+const SNAPSHOT_WINDOW: usize = 20; // the maximum number of temporary snapshots
 
 pub enum SpeculativeMessageStatus {
     Speculative, // This is a speculative order
@@ -101,6 +101,9 @@ impl SpeculativeExecutor {
                                     let elapsed = start_time.elapsed();
                                     tracing::debug!("Consensus execution of {} blocks took {:?}", sub_dags.len(), elapsed);
 
+                                    // Clone before moving into spawn_blocking so we can use it as a base snapshot below
+                                    let committed_state = new_states.clone();
+
                                      // Commit with mutex lock in blocking context
                                     let pevm_executor = Arc::clone(&self.pevm_executor);
                                     tokio::task::spawn_blocking(move || {
@@ -141,6 +144,16 @@ impl SpeculativeExecutor {
 
                                     // Clean and update snapshots
                                     self.clean_and_update_snapshots(&committed_leaders);
+
+                                    // If cleanup wiped all snapshots (misprediction case), seed a base
+                                    // snapshot from the committed state so future speculative executions
+                                    // build on the correct committed base rather than empty state.
+                                    if self.snapshot_window.is_empty() {
+                                        self.snapshot_window.push_back(SpeculativeExecutionSnapshot::new(
+                                            Vec::new(),
+                                            committed_state,
+                                        ));
+                                    }
                                 },
                             }
 

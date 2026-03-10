@@ -616,10 +616,22 @@ impl<H: BlockHandler> Core<H> {
             .aps_tree
             .get_predict_committed_leader_blocks_up_to_round(last_committed_round)
         {
-            if *leader_prediction.reference() != committed_leaders.remove(0) {
-                // the speculative order is inconsistent with the consensus order
+            // Only compare against committed_leaders if there are still entries to consume.
+            // When a predicted leader was skipped by consensus, committed_leaders will have
+            // fewer entries than the predictions up to last_committed_round.
+            if !committed_leaders.is_empty() {
+                if *leader_prediction.reference() != committed_leaders[0] {
+                    // the speculative order is inconsistent with the consensus order
+                    tracing::debug!(
+                        "Speculative prediction {:?} inconsistent with consensus {:?}",
+                        leader_prediction.reference(),
+                        committed_leaders[0],
+                    );
+                } else {
+                    consistent_committed_leader_num += 1;
+                    committed_leaders.remove(0);
+                }
             }
-            consistent_committed_leader_num += 1;
             decided_leader_num = (leader_prediction.round() - predict_start_round + 1) as usize;
         }
         (consistent_committed_leader_num, decided_leader_num)
