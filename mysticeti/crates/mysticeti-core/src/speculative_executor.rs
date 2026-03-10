@@ -42,6 +42,8 @@ pub struct SpeculativeExecutor {
     pub snapshot_window: VecDeque<SpeculativeExecutionSnapshot>,
     /// The node reputation tracker
     pub node_reputation: NodeReputation,
+    /// The latest committed base state
+    pub committed_base_state: EvmStateWriteSet,
     metrics: Arc<Metrics>,
 }
 
@@ -65,6 +67,7 @@ impl SpeculativeExecutor {
                 snapshots: vec![initial_snapshot.clone()], // Start with base snapshot
                 snapshot_window: VecDeque::with_capacity(SNAPSHOT_WINDOW),
                 node_reputation,
+                committed_base_state: EvmStateWriteSet::default(),
                 metrics,
             }
             .run()
@@ -97,6 +100,7 @@ impl SpeculativeExecutor {
 
                                     // Execute the committed blocks (based on the speculative execution snapshots)
                                     let new_states = self.consensus_execution_on_blocks(&sub_dags).await;
+                                    self.committed_base_state = new_states.clone();
 
                                     let elapsed = start_time.elapsed();
                                     tracing::debug!("Consensus execution of {} blocks took {:?}", sub_dags.len(), elapsed);
@@ -256,7 +260,9 @@ impl SpeculativeExecutor {
 
         match best_snapshot {
             Some(snapshot) => {
-                let hit_count = snapshot.ordered_leaders.len();
+                let target_leaders: Vec<BlockReference> =
+                    sub_dags.iter().map(|sd| sd.anchor).collect();
+                let hit_count = common_prefix_length(&snapshot.ordered_leaders, &target_leaders);
                 tracing::debug!(
                     "Consensus execution: found matching snapshot with {} leaders, executing {} new leader blocks on top",
                     hit_count,
@@ -313,7 +319,7 @@ impl SpeculativeExecutor {
                     "Consensus execution: no matching snapshot found, execute {} leader blocks",
                     sub_dags.len()
                 );
-                let mut new_state = EvmStateWriteSet::default();
+                let mut new_state = self.committed_base_state.clone();
 
                 // Clone executor Arc once outside the loop
                 let executor = Arc::clone(&self.pevm_executor);
