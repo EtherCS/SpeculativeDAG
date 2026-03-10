@@ -1,7 +1,8 @@
 mysticeti/v*.log.ansi
 mysticeti/dryrun-validator*
-mysticeti/scripts/*.log
 mysticeti/scripts/*.txt
+mysticeti/scripts/*.pdf
+mysticeti/scripts/results/*
 mysticeti/target/*
 pevm/target/*
 pevm/crates/pevm/target/*
@@ -9,3 +10,6 @@ mysticeti/logs/*
 
 **.ansi
 **-validator*
+
+mysticeti/crates/orchestrator/assets/settings.yml
+mysticeti/crates/orchestrator/assets/node-parameters.yml
