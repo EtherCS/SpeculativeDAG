@@ -11,6 +11,7 @@ use std::{
 };
 
 use futures::future::join_all;
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use tokio::{
     select,
     sync::{mpsc, oneshot, Notify},
@@ -34,6 +35,7 @@ use crate::{
 
 /// The maximum number of blocks that can be requested in a single message.
 pub const MAXIMUM_BLOCK_REQUEST: usize = 10;
+const FIXED_JITTER_RNG_SEED: u64 = 0x5EED_C0DE;
 
 pub struct NetworkSyncer<H: BlockHandler, C: CommitObserver> {
     inner: Arc<NetworkSyncerInner<H, C>>,
@@ -109,6 +111,7 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
             let jitter_node_indices = generate_n_random_authority_indices(
                 net_para.fault_num,
                 net_para.committee_size,
+                FIXED_JITTER_RNG_SEED,
             );
             is_network_jitter_node = jitter_node_indices.contains(&authority_index);
         }
@@ -167,8 +170,12 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
         let committee_size = network_jitter_simulation_parameters.committee_size;
         let delay_connection_num = network_jitter_simulation_parameters.delay_connection_num;
         // By default, we assume half of the connections will have delayed network
-        let delay_connection_authorities =
-            generate_n_random_authority_indices(delay_connection_num, committee_size);
+        let delay_connection_authorities = generate_n_random_peer_authority_indices(
+            authority_index,
+            delay_connection_num,
+            committee_size,
+            FIXED_JITTER_RNG_SEED,
+        );
 
         while let Some(connection) = inner.recv_or_stopped(network.connection_receiver()).await {
             let peer_id = connection.peer_id;
@@ -355,14 +362,34 @@ impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncer<H, C>
     }
 }
 
-fn generate_n_random_authority_indices(num: usize, committee_size: usize) -> Vec<AuthorityIndex> {
-    use rand::{seq::IteratorRandom, thread_rng};
-    let mut rng = thread_rng();
-    (0..committee_size)
-        .choose_multiple(&mut rng, num)
-        .into_iter()
+fn generate_n_random_authority_indices(
+    num: usize,
+    committee_size: usize,
+    seed: u64,
+) -> Vec<AuthorityIndex> {
+    let mut candidates: Vec<AuthorityIndex> = (0..committee_size).map(|i| i as AuthorityIndex).collect();
+    let mut rng = StdRng::seed_from_u64(seed);
+    candidates.shuffle(&mut rng);
+    candidates.truncate(num.min(candidates.len()));
+    candidates.sort_unstable();
+    candidates
+}
+
+fn generate_n_random_peer_authority_indices(
+    authority_index: AuthorityIndex,
+    num: usize,
+    committee_size: usize,
+    seed: u64,
+) -> Vec<AuthorityIndex> {
+    let mut candidates: Vec<AuthorityIndex> = (0..committee_size)
         .map(|i| i as AuthorityIndex)
-        .collect()
+        .filter(|peer| *peer != authority_index)
+        .collect();
+    let mut rng = StdRng::seed_from_u64(seed ^ ((authority_index as u64) << 32));
+    candidates.shuffle(&mut rng);
+    candidates.truncate(num.min(candidates.len()));
+    candidates.sort_unstable();
+    candidates
 }
 
 impl<H: BlockHandler + 'static, C: CommitObserver + 'static> NetworkSyncerInner<H, C> {
