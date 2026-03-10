@@ -48,8 +48,8 @@ for i, csv_path in enumerate(csv_files):
     marker = markers[i % len(markers)]
     x = df['elapsed_secs'].to_numpy()
     x = x - x.min() + 1  # offset so x-axis starts from 1
-    ax.plot(x, df['p50_ms'].to_numpy() / 1000.0, linewidth=2, color=color, linestyle='-',  marker=marker, markersize=5, label=f'{label} (p50)')
-    ax.plot(x, df['p90_ms'].to_numpy() / 1000.0, linewidth=2, color=color, linestyle='--', marker=marker, markersize=5, label=f'{label} (p90)')
+    # ax.plot(x, df['p50_ms'].to_numpy() / 1000.0, linewidth=2, color=color, linestyle='-',  marker=marker, markersize=5, label=f'{label} (p50)')
+    ax.plot(x, df['p99_ms'].to_numpy() / 1000.0, linewidth=2, color=color, linestyle='--', marker=marker, markersize=5, label=f'{label}')
 
 ax.set_xlabel('Request start time (s)')
 ax.set_ylabel('Latency (s)')
