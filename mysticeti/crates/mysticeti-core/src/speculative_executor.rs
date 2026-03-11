@@ -347,6 +347,7 @@ impl SpeculativeExecutor {
         // Find the best matching snapshot (longest common prefix with sub_dags)
         let best_snapshot = self.find_best_matching_snapshot(&sub_dags);
 
+        let start_execution_time = std::time::Instant::now();
         match best_snapshot {
             Some(snapshot) => {
                 let target_leaders: Vec<BlockReference> =
@@ -401,6 +402,8 @@ impl SpeculativeExecutor {
                     }
                 }
 
+                tracing::debug!{"(matched) Block execution time {:?}", start_execution_time.elapsed()};
+                
                 new_state
             }
             None => {
@@ -451,6 +454,8 @@ impl SpeculativeExecutor {
                             .observe(end_execution_time / block_count as u32);
                     }
                 }
+
+                tracing::debug!{"(unmatched) Block execution time {:?}", start_execution_time.elapsed()};
 
                 new_state
             }

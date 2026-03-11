@@ -7,14 +7,14 @@ To simulate such failure conditions (i.e., the direct rules failed to be applied
 ```
 cd mysticeti/scripts
 bash jitterrun.sh 
-# with parameters [running_time] [committee_size] [jitter_node_num] [delay_connection_num] [delay_per_connection_in_millisecond] [jitter_start_time] [jitter_duration_in_seconds]
+# with parameters [running_time] [committee_size] [jitter_node_num] [delay_connection_num] [delay_per_connection_in_millisecond] [jitter_start_time] [jitter_duration_in_seconds] [tx_load]
 ```
 For example, by executing:
 ```
-bash jitterrun.sh 90 7 2 4 2500 10 50
+bash jitterrun.sh 60 4 4 2 3000 10 20 100
 ```
 
-It will run 7 nodes with 2 nodes that experiences jitter (randomly choosing 4 connections and add 2500 ms delay) for 50 seconds after the node is running 10 seconds. The evaluation will run 90 seconds.
+It will run 4 nodes with 4 random nodes that experiences jitter (randomly choosing 2 connections and add 3000 ms delay) for 20 seconds after the node is running 10 seconds. The evaluation will run 60 seconds. The transaction input is 100 tx/s.
 > Note that to guarantee the failure of direct decision, the delay should be set larger than the leader timeout (2s by default).
 
 ```
