@@ -76,99 +76,188 @@ impl SpeculativeExecutor {
     }
 
     pub async fn run(&mut self) {
+        let mut pending_consensus: VecDeque<(APSTree, Vec<CommittedSubDag>)> = VecDeque::new();
+        let mut pending_speculative: VecDeque<Vec<CommittedSubDag>> = VecDeque::new();
+
         loop {
             tokio::select! {
                 Some(speculative_message) = self.speculative_message_receiver.recv() => {
-                    match speculative_message{
+                    match speculative_message {
                         SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => {
                             match flag {
-                                SpeculativeMessageStatus::Speculative => {
-                                    tracing::debug!("Received {} speculatively ordered blocks to execute, leaders {:?}", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
-                                    let now_time = std::time::Instant::now();
-
-                                    self.speculative_execution_on_blocks(&sub_dags).await;
-
-                                    let elapsed = now_time.elapsed();
-                                    tracing::debug!("Speculative execution of {:?} blocks took {:?}", sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>(), elapsed);
-                                },
                                 SpeculativeMessageStatus::Consensus => {
-                                    tracing::debug!("Received {} consensus ordered blocks {:?} to execute", sub_dags.len(), sub_dags.iter().map(|sd| sd.anchor).collect::<Vec<BlockReference>>());
-                                    let start_time = std::time::Instant::now();
-
-                                    // for the consensus message, sub_dags is the newly committed anchors
-                                    let committed_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
-
-                                    // Execute the committed blocks (based on the speculative execution snapshots)
-                                    let new_states = self.consensus_execution_on_blocks(&sub_dags).await;
-                                    self.committed_base_state = new_states.clone();
-
-                                    let elapsed = start_time.elapsed();
-                                    tracing::debug!("Consensus execution of {} blocks took {:?}", sub_dags.len(), elapsed);
-
-                                    // Clone before moving into spawn_blocking so we can use it as a base snapshot below
-                                    let committed_state = new_states.clone();
-
-                                     // Commit with mutex lock in blocking context
-                                    let pevm_executor = Arc::clone(&self.pevm_executor);
-                                    tokio::task::spawn_blocking(move || {
-                                        let mut executor = pevm_executor.lock().unwrap();
-                                        executor.commit_speculative_execution(new_states);
-                                    }).await.expect("Commit task failed");
-
-                                    // record the end-to-end tx latency
-                                    let current_timestamp = runtime::timestamp_utc();
-                                    let metrics = self.metrics.clone();
-                                    tokio::task::spawn_blocking(move || {
-                                        for sub_dag in sub_dags.iter() {
-                                            for block in &sub_dag.blocks {
-                                                for statement in block.statements() {
-                                                    if let BaseStatement::Share(share) = statement {
-                                                        let creation_time = TransactionGenerator::extract_timestamp(share);
-                                                        metrics
-                                                            .transaction_committed_latency
-                                                            .observe(current_timestamp.saturating_sub(creation_time));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }).await.expect("Latency recording task failed");
-
-                                    // update node reputations based on the committed leaders and the previous predictions
-                                    let committed_leaders_rounds = committed_leaders.iter().map(|b| b.round).collect::<Vec<u64>>();
-                                    let last_committed_leader_round = *committed_leaders_rounds.last().unwrap_or(&0);
-                                    for predicted in aps_tree.pending_leaders.iter().take_while(|p| p.round <= last_committed_leader_round) {
-                                        let hit = committed_leaders_rounds.contains(&predicted.round);
-                                        match (predicted.status, hit) {
-                                            (LeaderPredictionStatus::Committed, true) => self.node_reputation.update_score(predicted.author, 1),  // correct
-                                            (LeaderPredictionStatus::Committed, false) => self.node_reputation.update_score(predicted.author, -1), // incorrect
-                                            (LeaderPredictionStatus::Skipped, true) => self.node_reputation.update_score(predicted.author, -1),    // missed
-                                            (LeaderPredictionStatus::Skipped, false) => self.node_reputation.update_score(predicted.author, 1),    // correct skip
-                                        }
-                                    }
-
-                                    // Clean and update snapshots
-                                    self.clean_and_update_snapshots(&committed_leaders);
-
-                                    // If cleanup wiped all snapshots (misprediction case), seed a base
-                                    // snapshot from the committed state so future speculative executions
-                                    // build on the correct committed base rather than empty state.
-                                    if self.snapshot_window.is_empty() {
-                                        self.snapshot_window.push_back(SpeculativeExecutionSnapshot::new(
-                                            Vec::new(),
-                                            committed_state,
-                                        ));
-                                    }
-                                },
+                                    pending_consensus.push_back((aps_tree, sub_dags));
+                                }
+                                SpeculativeMessageStatus::Speculative => {
+                                    pending_speculative.clear();
+                                    pending_speculative.push_back(sub_dags);
+                                }
                             }
-
-                        },
+                        }
                         SpeculativeMessage::OtherMessage => {
                             // Handle other types of messages here
-                        },
+                        }
+                    }
+
+                    while let Ok(next_message) = self.speculative_message_receiver.try_recv() {
+                        match next_message {
+                            SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => {
+                                match flag {
+                                    SpeculativeMessageStatus::Consensus => {
+                                        pending_consensus.push_back((aps_tree, sub_dags));
+                                    }
+                                    SpeculativeMessageStatus::Speculative => {
+                                        pending_speculative.clear();
+                                        pending_speculative.push_back(sub_dags);
+                                    }
+                                }
+                            }
+                            SpeculativeMessage::OtherMessage => {
+                                // Handle other types of messages here
+                            }
+                        }
                     }
                 }
-                // Todo: We might need to handle error here
+                else => break,
             }
+
+            while let Some((aps_tree, sub_dags)) = pending_consensus.pop_front() {
+                self.handle_consensus_message(aps_tree, sub_dags).await;
+            }
+
+            if pending_consensus.is_empty() {
+                if let Some(sub_dags) = pending_speculative.pop_front() {
+                    self.handle_speculative_message(sub_dags).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_speculative_message(&mut self, sub_dags: Vec<CommittedSubDag>) {
+        tracing::debug!(
+            "Received {} speculatively ordered blocks to execute, leaders {:?}",
+            sub_dags.len(),
+            sub_dags
+                .iter()
+                .map(|sd| sd.anchor)
+                .collect::<Vec<BlockReference>>()
+        );
+        let now_time = std::time::Instant::now();
+
+        self.speculative_execution_on_blocks(&sub_dags).await;
+
+        let elapsed = now_time.elapsed();
+        tracing::debug!(
+            "Speculative execution of {:?} blocks took {:?}",
+            sub_dags
+                .iter()
+                .map(|sd| sd.anchor)
+                .collect::<Vec<BlockReference>>(),
+            elapsed
+        );
+    }
+
+    async fn handle_consensus_message(
+        &mut self,
+        aps_tree: APSTree,
+        sub_dags: Vec<CommittedSubDag>,
+    ) {
+        tracing::debug!(
+            "Received {} consensus ordered blocks {:?} to execute",
+            sub_dags.len(),
+            sub_dags
+                .iter()
+                .map(|sd| sd.anchor)
+                .collect::<Vec<BlockReference>>()
+        );
+        let start_time = std::time::Instant::now();
+
+        // for the consensus message, sub_dags is the newly committed anchors
+        let committed_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
+
+        // Execute the committed blocks (based on the speculative execution snapshots)
+        let new_states = self.consensus_execution_on_blocks(&sub_dags).await;
+        self.committed_base_state = new_states.clone();
+
+        let elapsed = start_time.elapsed();
+        tracing::debug!(
+            "Consensus execution of {} blocks took {:?}",
+            sub_dags.len(),
+            elapsed
+        );
+
+        // Clone before moving into spawn_blocking so we can use it as a base snapshot below
+        let committed_state = new_states.clone();
+
+        // Commit with mutex lock in blocking context
+        let pevm_executor = Arc::clone(&self.pevm_executor);
+        tokio::task::spawn_blocking(move || {
+            let mut executor = pevm_executor.lock().unwrap();
+            executor.commit_speculative_execution(new_states);
+        })
+        .await
+        .expect("Commit task failed");
+
+        // record the end-to-end tx latency
+        let current_timestamp = runtime::timestamp_utc();
+        let metrics = self.metrics.clone();
+        tokio::task::spawn_blocking(move || {
+            for sub_dag in sub_dags.iter() {
+                for block in &sub_dag.blocks {
+                    for statement in block.statements() {
+                        if let BaseStatement::Share(share) = statement {
+                            let creation_time = TransactionGenerator::extract_timestamp(share);
+                            metrics
+                                .transaction_committed_latency
+                                .observe(current_timestamp.saturating_sub(creation_time));
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("Latency recording task failed");
+
+        // update node reputations based on the committed leaders and the previous predictions
+        let committed_leaders_rounds = committed_leaders
+            .iter()
+            .map(|b| b.round)
+            .collect::<Vec<u64>>();
+        let last_committed_leader_round = *committed_leaders_rounds.last().unwrap_or(&0);
+        for predicted in aps_tree
+            .pending_leaders
+            .iter()
+            .take_while(|p| p.round <= last_committed_leader_round)
+        {
+            let hit = committed_leaders_rounds.contains(&predicted.round);
+            match (predicted.status, hit) {
+                (LeaderPredictionStatus::Committed, true) => {
+                    self.node_reputation.update_score(predicted.author, 1)
+                } // correct
+                (LeaderPredictionStatus::Committed, false) => {
+                    self.node_reputation.update_score(predicted.author, -1)
+                } // incorrect
+                (LeaderPredictionStatus::Skipped, true) => {
+                    self.node_reputation.update_score(predicted.author, -1)
+                } // missed
+                (LeaderPredictionStatus::Skipped, false) => {
+                    self.node_reputation.update_score(predicted.author, 1)
+                } // correct skip
+            }
+        }
+
+        // Clean and update snapshots
+        self.clean_and_update_snapshots(&committed_leaders);
+
+        // If cleanup wiped all snapshots (misprediction case), seed a base
+        // snapshot from the committed state so future speculative executions
+        // build on the correct committed base rather than empty state.
+        if self.snapshot_window.is_empty() {
+            self.snapshot_window
+                .push_back(SpeculativeExecutionSnapshot::new(
+                    Vec::new(),
+                    committed_state,
+                ));
         }
     }
 
