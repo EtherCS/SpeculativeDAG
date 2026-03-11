@@ -344,6 +344,13 @@ impl Default for ClientParameters {
     }
 }
 
+impl ClientParameters {
+    pub fn with_load(mut self, load: usize) -> Self {
+        self.load = load;
+        self
+    }
+}
+
 impl ImportExport for ClientParameters {}
 
 /// Configuration for simulating network jitter in nodes.

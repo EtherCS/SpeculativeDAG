@@ -2,7 +2,7 @@
 
 ```
 cd mysticeti/scripts
-bash jitterrun.sh 90 4 1 2 2500 10 20
+bash jitterrun.sh 90 4 1 2 2500 10 20 10
 ```
 
 Then, run the following command to get the latency figure:

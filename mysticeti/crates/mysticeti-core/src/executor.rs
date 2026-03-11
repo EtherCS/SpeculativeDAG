@@ -65,6 +65,8 @@ impl Executor {
                     // Record block execution latency
                     self.metrics.block_execution_latency.observe(end_execution_time / block_num);
 
+                    tracing::debug!("Block execution time: {:?}", end_execution_time);
+
                     // Record end-to-end transaction latency.
                     let current_timestamp = runtime::timestamp_utc();
                     for creation_time in txs_creation_timestamp.iter() {

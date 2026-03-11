@@ -100,6 +100,9 @@ enum Operation {
         /// The duration of the jitter simulation in seconds.
         #[clap(long, value_name = "INT")]
         duration_secs: u64,
+        /// Transaction load
+        #[clap(long, value_name = "INT")]
+        load: usize,
     },
 }
 
@@ -155,6 +158,7 @@ async fn main() -> Result<()> {
             jitter_ms,
             start_time,
             duration_secs,
+            load,
         } => {
             jitterrun(
                 authority,
@@ -164,6 +168,7 @@ async fn main() -> Result<()> {
                 jitter_ms,
                 start_time,
                 duration_secs,
+                load,
             )
             .await?;
         }
@@ -368,6 +373,7 @@ async fn jitterrun(
     jitter_ms: u64,
     start_time: u64,
     duration_secs: u64,
+    load: usize,
 ) -> Result<()> {
     tracing::warn!(
         "Starting validator {authority} in net jitter simulation mode (committee size: {committee_size}, fault num: {fault_num}, jitter ms: {jitter_ms}, duration secs: {duration_secs})"
@@ -377,7 +383,7 @@ async fn jitterrun(
     let num_people_per_family = 8;
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
-    let client_parameters = ClientParameters::default();
+    let client_parameters = ClientParameters::default().with_load(load);
     let workload_type = pevm::api::WorkloadType::ERC20(
         num_clusters,
         num_families_per_cluster,
