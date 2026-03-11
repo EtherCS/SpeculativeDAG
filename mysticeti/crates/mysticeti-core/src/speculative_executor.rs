@@ -134,13 +134,11 @@ impl SpeculativeExecutor {
     }
 
     async fn handle_speculative_message(&mut self, sub_dags: Vec<CommittedSubDag>) {
+        let leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
         tracing::debug!(
             "Received {} speculatively ordered blocks to execute, leaders {:?}",
             sub_dags.len(),
-            sub_dags
-                .iter()
-                .map(|sd| sd.anchor)
-                .collect::<Vec<BlockReference>>()
+            leaders
         );
         let now_time = std::time::Instant::now();
 
@@ -149,10 +147,7 @@ impl SpeculativeExecutor {
         let elapsed = now_time.elapsed();
         tracing::debug!(
             "Speculative execution of {:?} blocks took {:?}",
-            sub_dags
-                .iter()
-                .map(|sd| sd.anchor)
-                .collect::<Vec<BlockReference>>(),
+            leaders,
             elapsed
         );
     }
@@ -185,9 +180,6 @@ impl SpeculativeExecutor {
             sub_dags.len(),
             elapsed
         );
-
-        // Clone before moving into spawn_blocking so we can use it as a base snapshot below
-        let committed_state = new_states.clone();
 
         // Commit with mutex lock in blocking context
         let pevm_executor = Arc::clone(&self.pevm_executor);
@@ -256,7 +248,7 @@ impl SpeculativeExecutor {
             self.snapshot_window
                 .push_back(SpeculativeExecutionSnapshot::new(
                     Vec::new(),
-                    committed_state,
+                    self.committed_base_state.clone(),
                 ));
         }
     }
@@ -402,8 +394,8 @@ impl SpeculativeExecutor {
                     }
                 }
 
-                tracing::debug!{"(matched) Block execution time {:?}", start_execution_time.elapsed()};
-                
+                tracing::debug! {"(matched) Block execution time {:?}", start_execution_time.elapsed()};
+
                 new_state
             }
             None => {
@@ -455,7 +447,7 @@ impl SpeculativeExecutor {
                     }
                 }
 
-                tracing::debug!{"(unmatched) Block execution time {:?}", start_execution_time.elapsed()};
+                tracing::debug! {"(unmatched) Block execution time {:?}", start_execution_time.elapsed()};
 
                 new_state
             }
@@ -469,10 +461,7 @@ impl SpeculativeExecutor {
     ) -> Option<&SpeculativeExecutionSnapshot> {
         let mut best_match: Option<&SpeculativeExecutionSnapshot> = None;
         let mut best_match_length = 0;
-        let mut target_leaders = vec![];
-        for sub_dag in sub_dags {
-            target_leaders.push(sub_dag.anchor);
-        }
+        let target_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
 
         // we should consider the recent snapshots in self.snapshot_window to prevent state overwritten issue
         let all_snapshots: Vec<&SpeculativeExecutionSnapshot> = self
