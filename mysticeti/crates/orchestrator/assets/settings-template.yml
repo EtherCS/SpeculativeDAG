@@ -1,11 +1,29 @@
+
 ---
-testbed_id: "${USER}-mysticeti"
+testbed_id: "${USER}-pufferfish"
 cloud_provider: aws
-token_file: "/Users/${USER}/.aws/credentials"
-ssh_private_key_file: "/Users/${USER}/.ssh/aws"
+token_file: "/home/${USER}/.aws/credentials_pufferfish"
+ssh_private_key_file: "/home/${USER}/.ssh/aws_pufferfish"
 regions:
-  - us-west-1
-specs: m5d.8xlarge
+  - us-east-1
+  # - us-west-2
+  # - ca-central-1
+  # - eu-central-1
+  # - eu-west-1
+  # - eu-west-2
+  # - eu-west-3
+  # - eu-north-1
+  # - ap-south-1
+  # - ap-southeast-1
+  # - ap-southeast-2
+  # - ap-northeast-1
+  # - ap-northeast-2
+specs: t3.xlarge
 repository:
-  url: https://github.com/asonnino/mysticeti.git
-  commit: main
+  url: https://github.com/EtherCS/SpeculativeDAG.git
+  commit: baseline
+node_parameters_path: "crates/orchestrator/assets/node-parameters.yml"
+account_storage_path: "crates/orchestrator/assets/storage_5_5_8.json"
+account_addresses_path: "crates/orchestrator/assets/account_addresses_5_5_8.bin"
+
+benchmark_duration: 240

@@ -14,16 +14,10 @@ use aws_sdk_ec2::{
     primitives::Blob,
     types::{
         builders::{
-            BlockDeviceMappingBuilder,
-            EbsBlockDeviceBuilder,
-            FilterBuilder,
-            TagBuilder,
+            BlockDeviceMappingBuilder, EbsBlockDeviceBuilder, FilterBuilder, TagBuilder,
             TagSpecificationBuilder,
         },
-        EphemeralNvmeSupport,
-        Instance as AwsInstance,
-        ResourceType,
-        VolumeType,
+        EphemeralNvmeSupport, Instance as AwsInstance, ResourceType, VolumeType,
     },
 };
 use serde::Serialize;
@@ -136,17 +130,59 @@ impl AwsClient {
     /// Query the image id determining the os of the instances.
     /// NOTE: The image id changes depending on the region.
     async fn find_image_id(&self, client: &aws_sdk_ec2::Client) -> CloudProviderResult<String> {
-        // Query all images that match the description.
-        let request = client.describe_images().filters(
+        // Try multiple Ubuntu versions in order of preference
+        let search_patterns = vec![
+            "ubuntu/images/hvm-ssd/ubuntu-noble-24.04-amd64-server-*",
+            "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
+        ];
+
+        for pattern in search_patterns {
+            let request = client
+                .describe_images()
+                .owners("099720109477") // Canonical's AWS account ID
+                .filters(
+                    FilterBuilder::default()
+                        .name("name")
+                        .values(pattern)
+                        .build(),
+                )
+                .filters(
+                    FilterBuilder::default()
+                        .name("state")
+                        .values("available")
+                        .build(),
+                );
+
+            let response = request.send().await?;
+
+            // Sort images by creation date and select the most recent one
+            let mut images = response.images().to_vec();
+            if !images.is_empty() {
+                images.sort_by(|a, b| {
+                    b.creation_date()
+                        .unwrap_or("")
+                        .cmp(a.creation_date().unwrap_or(""))
+                });
+
+                if let Some(image) = images.first() {
+                    if let Some(image_id) = &image.image_id {
+                        return Ok(image_id.clone());
+                    }
+                }
+            }
+        }
+
+        // Final fallback: try the original description-based search
+        let fallback_request = client.describe_images().filters(
             FilterBuilder::default()
                 .name("description")
                 .values(Self::OS_IMAGE)
                 .build(),
         );
-        let response = request.send().await?;
+        let fallback_response = fallback_request.send().await?;
 
         // Parse the response to select the first returned image id.
-        response
+        fallback_response
             .images()
             .first()
             .ok_or_else(|| CloudProviderError::RequestError("Cannot find image id".into()))?
