@@ -289,20 +289,18 @@ impl<H: BlockHandler> Core<H> {
                             .extend(new_speculative_subdags.clone());
                         // we only send new sub dags to reduce message size
                         // this is feasible since the channel has FIFO property
-                        match self.speculative_message_sender.try_send(
-                            SpeculativeMessage::ExecuteTxs(
+                        if let Err(e) = self
+                            .speculative_message_sender
+                            .blocking_send(SpeculativeMessage::ExecuteTxs(
                                 self.aps_tree.clone(),
                                 new_speculative_subdags,
                                 SpeculativeMessageStatus::Speculative,
-                            ),
-                        ) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Speculative message channel full or closed, skipping: {:?}",
-                                    e
-                                );
-                            }
+                            ))
+                        {
+                            tracing::error!(
+                                "Failed to deliver speculative message to executor: {:?}",
+                                e
+                            );
                         }
                     }
                 }
@@ -539,7 +537,7 @@ impl<H: BlockHandler> Core<H> {
             self.check_speculative_consensus_consistency(&committed);
         // send the final consensus order to speculative executor for commitment
         self.speculative_message_sender
-            .try_send(SpeculativeMessage::ExecuteTxs(
+            .blocking_send(SpeculativeMessage::ExecuteTxs(
                 self.aps_tree.clone(),
                 committed.clone(),
                 SpeculativeMessageStatus::Consensus,
