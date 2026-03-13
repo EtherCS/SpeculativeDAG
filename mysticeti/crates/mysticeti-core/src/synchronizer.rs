@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures::future::join_all;
-use rand::{seq::SliceRandom, thread_rng};
+use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom, thread_rng};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -23,6 +23,8 @@ use crate::{
 };
 
 // TODO: A central controller will eventually dynamically update these parameters.
+const FIXED_JITTER_RNG_SEED: u64 = 0x5EED_C0DE;
+
 pub struct SynchronizerParameters {
     /// The maximum number of helpers (across all nodes).
     pub absolute_maximum_helpers: usize,
@@ -197,8 +199,9 @@ where
         is_delay_connection: bool,
     ) -> Option<()> {
         let start_time = Instant::now();
+        // Deterministic RNG per author for reproducible jitter.
+        let mut jitter_rng = StdRng::seed_from_u64(FIXED_JITTER_RNG_SEED ^ ((author as u64) << 32));
         loop {
-            let committee_size = njs_paras.committee_size;
             let notified = inner.notify.notified();
             let blocks = inner.block_store.get_own_blocks(round, batch_size);
             if !blocks.is_empty() {
@@ -208,13 +211,15 @@ where
                         && is_delay_connection
                         && (start_time.elapsed() >= njs_paras.start_time)
                         && (start_time.elapsed() - njs_paras.start_time < njs_paras.jitter_duration)
-                        && round % committee_size as u64 == author
-                    // only delay sending the leader block
                     {
-                        sleep(njs_paras.network_jitter).await;
+                        let max_ms = njs_paras.network_jitter.as_millis().max(1) as u64;
+                        let delay_ms = jitter_rng.gen_range(0..=max_ms);
+                        let delay = Duration::from_millis(delay_ms);
+                        sleep(delay).await;
                         tracing::debug!(
-                            "Network Jitter Simulation: Delayed sending own blocks by {:?}",
-                            njs_paras.network_jitter
+                            "Network Jitter Simulation: Randomly delayed block round {} by {:?}",
+                            round,
+                            delay
                         );
                     }
 
