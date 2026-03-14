@@ -247,7 +247,6 @@ async fn run(
     private_config_path: String,
     client_parameters_path: String,
 ) -> Result<()> {
-
     let committee = Committee::load(&committee_path)
         .wrap_err(format!("Failed to load committee file '{committee_path}'"))?;
     let public_config = NodePublicConfig::load(&public_config_path).wrap_err(format!(

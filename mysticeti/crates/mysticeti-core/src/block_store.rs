@@ -20,14 +20,8 @@ use crate::{
     metrics::{Metrics, UtilizationTimerExt},
     state::{RecoveredState, RecoveredStateBuilder},
     types::{
-        AuthorityIndex,
-        BaseStatement,
-        BlockDigest,
-        BlockReference,
-        RoundNumber,
-        StatementBlock,
-        Transaction,
-        TransactionLocator,
+        AuthorityIndex, BaseStatement, BlockDigest, BlockReference, RoundNumber, StatementBlock,
+        Transaction, TransactionLocator,
     },
     wal::{Tag, WalPosition, WalReader, WalWriter},
 };

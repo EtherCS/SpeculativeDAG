@@ -8,10 +8,8 @@ use std::{cmp::min, sync::Arc};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 
-use crate::{
-    runtime::{self, timestamp_utc},
-};
-use pevm::api::{PevmAPI, APIError, TransactionWithHint};
+use crate::runtime::{self, timestamp_utc};
+use pevm::api::{APIError, PevmAPI, TransactionWithHint};
 
 pub struct ScheduleFetcher {
     // This struct can hold any necessary state for fetching scheduled tasks.
@@ -25,7 +23,7 @@ impl ScheduleFetcher {
     pub fn start(pevm_api: Arc<Mutex<PevmAPI>>) {
         tracing::info!("Starting ScheduleFetcher");
         tokio::spawn(async move {
-            Self{}.run(pevm_api).await;
+            Self {}.run(pevm_api).await;
         });
     }
 

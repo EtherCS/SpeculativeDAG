@@ -367,7 +367,8 @@ fn generate_n_random_authority_indices(
     committee_size: usize,
     seed: u64,
 ) -> Vec<AuthorityIndex> {
-    let mut candidates: Vec<AuthorityIndex> = (0..committee_size).map(|i| i as AuthorityIndex).collect();
+    let mut candidates: Vec<AuthorityIndex> =
+        (0..committee_size).map(|i| i as AuthorityIndex).collect();
     let mut rng = StdRng::seed_from_u64(seed);
     candidates.shuffle(&mut rng);
     candidates.truncate(num.min(candidates.len()));
