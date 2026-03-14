@@ -291,13 +291,15 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
     }
 
     /// Cleanup all instances and optionally delete their log files.
-    pub async fn cleanup(&self, delete_logs: bool) -> TestbedResult<()> {
+    pub async fn cleanup(&self, delete_logs: bool, delete_storage: bool) -> TestbedResult<()> {
         display::action("Cleaning up testbed");
 
         // Kill all tmux servers and delete the nodes dbs. Optionally clear logs.
         let mut command = vec!["(tmux kill-server || true)".into()];
-        for path in self.protocol_commands.db_directories() {
-            command.push(format!("(rm -rf {} || true)", path.display()));
+        if delete_storage {
+            for path in self.protocol_commands.db_directories() {
+                command.push(format!("(rm -rf {} || true)", path.display()));
+            }
         }
         if delete_logs {
             command.push("(rm -rf ~/*log* || true)".into());
@@ -616,7 +618,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
         display::newline();
 
         // Cleanup the testbed (in case the previous run was not completed).
-        self.cleanup(true).await?;
+        self.cleanup(true, true).await?;
 
         // Update the software on all instances.
         if !self.skip_testbed_update {
@@ -634,7 +636,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             display::newline();
 
             // Cleanup the testbed (in case the previous run was not completed).
-            self.cleanup(true).await?;
+            self.cleanup(true, true).await?;
             // Start the instance monitoring tools.
             self.start_monitoring(&parameters).await?;
 
@@ -658,7 +660,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             aggregator.display_summary();
 
             // Kill the nodes and clients (without deleting the log files).
-            self.cleanup(false).await?;
+            self.cleanup(false, false).await?;
 
             // Download the log files.
             if self.settings.log_processing {
