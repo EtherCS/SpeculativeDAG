@@ -289,20 +289,17 @@ impl<H: BlockHandler> Core<H> {
                             .extend(new_speculative_subdags.clone());
                         // we only send new sub dags to reduce message size
                         // this is feasible since the channel has FIFO property
-                        match self.speculative_message_sender.try_send(
+                        if let Err(e) = self.speculative_message_sender.blocking_send(
                             SpeculativeMessage::ExecuteTxs(
                                 self.aps_tree.clone(),
                                 new_speculative_subdags,
                                 SpeculativeMessageStatus::Speculative,
                             ),
                         ) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Speculative message channel full or closed, skipping: {:?}",
-                                    e
-                                );
-                            }
+                            tracing::error!(
+                                "Failed to deliver speculative message to executor: {:?}",
+                                e
+                            );
                         }
                     }
                 }
@@ -416,7 +413,7 @@ impl<H: BlockHandler> Core<H> {
     /// start_round: the latest round of the leader block needed to be predicted
     /// last_predicted_round: the round that we last predicted
     fn add_leaders_to_aps_tree(
-        &mut self,
+        &self,
         start_round: RoundNumber,
         last_predicted_round: RoundNumber,
     ) -> Vec<LeaderPrediction> {
@@ -539,7 +536,7 @@ impl<H: BlockHandler> Core<H> {
             self.check_speculative_consensus_consistency(&committed);
         // send the final consensus order to speculative executor for commitment
         self.speculative_message_sender
-            .try_send(SpeculativeMessage::ExecuteTxs(
+            .blocking_send(SpeculativeMessage::ExecuteTxs(
                 self.aps_tree.clone(),
                 committed.clone(),
                 SpeculativeMessageStatus::Consensus,
@@ -616,10 +613,22 @@ impl<H: BlockHandler> Core<H> {
             .aps_tree
             .get_predict_committed_leader_blocks_up_to_round(last_committed_round)
         {
-            if *leader_prediction.reference() != committed_leaders.remove(0) {
-                // the speculative order is inconsistent with the consensus order
+            // Only compare against committed_leaders if there are still entries to consume.
+            // When a predicted leader was skipped by consensus, committed_leaders will have
+            // fewer entries than the predictions up to last_committed_round.
+            if !committed_leaders.is_empty() {
+                if *leader_prediction.reference() != committed_leaders[0] {
+                    // the speculative order is inconsistent with the consensus order
+                    tracing::debug!(
+                        "Speculative prediction {:?} inconsistent with consensus {:?}",
+                        leader_prediction.reference(),
+                        committed_leaders[0],
+                    );
+                } else {
+                    consistent_committed_leader_num += 1;
+                    committed_leaders.remove(0);
+                }
             }
-            consistent_committed_leader_num += 1;
             decided_leader_num = (leader_prediction.round() - predict_start_round + 1) as usize;
         }
         (consistent_committed_leader_num, decided_leader_num)

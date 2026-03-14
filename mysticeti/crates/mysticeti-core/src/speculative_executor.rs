@@ -449,6 +449,16 @@ impl SpeculativeExecutor {
 
                 tracing::debug! {"(unmatched) Block execution time {:?}", start_execution_time.elapsed()};
 
+                // Seed a snapshot from this consensus execution so the next batch has a match
+                if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
+                    self.snapshot_window.pop_front();
+                }
+                self.snapshot_window
+                    .push_back(SpeculativeExecutionSnapshot::new(
+                        sub_dags.iter().map(|sd| sd.anchor).collect(),
+                        new_state.clone(),
+                    ));
+
                 new_state
             }
         }
@@ -485,7 +495,9 @@ impl SpeculativeExecutor {
                 best_match_length = common_prefix_len;
             }
         }
-        best_match
+
+        // If no positive prefix match exists, reuse the most recent snapshot (which may have a zero-length prefix)
+        best_match.or_else(|| all_snapshots.last().copied())
     }
 
     /// Clean and update snapshots after a set of leaders has been committed
