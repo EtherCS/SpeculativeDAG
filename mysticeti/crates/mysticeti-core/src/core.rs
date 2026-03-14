@@ -289,14 +289,13 @@ impl<H: BlockHandler> Core<H> {
                             .extend(new_speculative_subdags.clone());
                         // we only send new sub dags to reduce message size
                         // this is feasible since the channel has FIFO property
-                        if let Err(e) = self
-                            .speculative_message_sender
-                            .blocking_send(SpeculativeMessage::ExecuteTxs(
+                        if let Err(e) = self.speculative_message_sender.blocking_send(
+                            SpeculativeMessage::ExecuteTxs(
                                 self.aps_tree.clone(),
                                 new_speculative_subdags,
                                 SpeculativeMessageStatus::Speculative,
-                            ))
-                        {
+                            ),
+                        ) {
                             tracing::error!(
                                 "Failed to deliver speculative message to executor: {:?}",
                                 e

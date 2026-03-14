@@ -453,10 +453,11 @@ impl SpeculativeExecutor {
                 if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
                     self.snapshot_window.pop_front();
                 }
-                self.snapshot_window.push_back(SpeculativeExecutionSnapshot::new(
-                    sub_dags.iter().map(|sd| sd.anchor).collect(),
-                    new_state.clone(),
-                ));
+                self.snapshot_window
+                    .push_back(SpeculativeExecutionSnapshot::new(
+                        sub_dags.iter().map(|sd| sd.anchor).collect(),
+                        new_state.clone(),
+                    ));
 
                 new_state
             }

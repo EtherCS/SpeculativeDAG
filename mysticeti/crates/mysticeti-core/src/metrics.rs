@@ -527,8 +527,7 @@ impl MetricReporter {
         self.connection_latency.report();
 
         // Write transaction committed latency percentiles to CSV
-        if let (Some([p50, p90, p99]), Some(ref mut csv)) =
-            (tx_committed_pcts, csv_writer.as_mut())
+        if let (Some([p50, p90, p99]), Some(ref mut csv)) = (tx_committed_pcts, csv_writer.as_mut())
         {
             use std::io::Write;
             let elapsed_secs = start_time.elapsed().as_secs_f64();

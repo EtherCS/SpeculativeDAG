@@ -104,7 +104,10 @@ impl Validator {
         // let account_addresses = pevm::api::load_account_addresses(&workload_type);
 
         if let Some(jitter_settings) = &public_config.parameters.network_jitter_simulation {
-            tracing::info!("Enabling network jitter simulation with settings: {:?}", jitter_settings);
+            tracing::info!(
+                "Enabling network jitter simulation with settings: {:?}",
+                jitter_settings
+            );
         }
 
         let (insufficient_txn_signal_sender, insufficient_txn_signal_receiver) =

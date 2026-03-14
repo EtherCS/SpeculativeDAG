@@ -15,12 +15,7 @@ use crate::types::Vote;
 use crate::{
     serde::{ByteRepr, BytesVisitor},
     types::{
-        AuthorityIndex,
-        BaseStatement,
-        BlockReference,
-        EpochStatus,
-        RoundNumber,
-        StatementBlock,
+        AuthorityIndex, BaseStatement, BlockReference, EpochStatus, RoundNumber, StatementBlock,
         TimestampNs,
     },
 };

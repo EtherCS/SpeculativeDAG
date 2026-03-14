@@ -12,8 +12,7 @@ use tokio::time::{self, Instant};
 use crate::{
     benchmark::BenchmarkParameters,
     client::Instance,
-    display,
-    ensure,
+    display, ensure,
     error::{TestbedError, TestbedResult},
     faults::CrashRecoverySchedule,
     logs::LogsAnalyzer,

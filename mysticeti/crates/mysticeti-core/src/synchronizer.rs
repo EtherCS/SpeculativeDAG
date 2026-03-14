@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures::future::join_all;
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom, thread_rng};
+use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng, SeedableRng};
 use tokio::sync::mpsc;
 
 use crate::{

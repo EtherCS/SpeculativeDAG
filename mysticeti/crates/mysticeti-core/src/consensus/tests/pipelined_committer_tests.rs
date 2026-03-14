@@ -3,9 +3,7 @@
 
 use crate::{
     consensus::{
-        universal_committer::UniversalCommitterBuilder,
-        LeaderStatus,
-        DEFAULT_WAVE_LENGTH,
+        universal_committer::UniversalCommitterBuilder, LeaderStatus, DEFAULT_WAVE_LENGTH,
     },
     test_util::{build_dag, build_dag_layer, committee, test_metrics, TestBlockWriter},
     types::{BlockReference, StatementBlock},
