@@ -12,8 +12,7 @@ use tokio::time::{self, Instant};
 use crate::{
     benchmark::BenchmarkParameters,
     client::Instance,
-    display,
-    ensure,
+    display, ensure,
     error::{TestbedError, TestbedResult},
     faults::CrashRecoverySchedule,
     logs::LogsAnalyzer,
@@ -369,7 +368,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
 
         // Select the instances to run.
         let (_, nodes, _) = self.select_instances(parameters)?;
-        
+
         display::action("\nvalidators selected");
         // Boot one node per instance.
         self.boot_nodes(nodes, parameters).await?;
@@ -567,6 +566,46 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             .expect("At least one log parser"))
     }
 
+    /// Download the baseline_latency.csv files produced by each node.
+    pub async fn download_baseline_latency_files(
+        &self,
+        parameters: &BenchmarkParameters,
+    ) -> TestbedResult<()> {
+        let (_, nodes, _) = self.select_instances(parameters)?;
+
+        let commit = &self.settings.repository.commit;
+        let path: PathBuf = [
+            &self.settings.results_dir,
+            &format!("baseline-latency-{commit}").into(),
+            &format!("baseline-latency-{parameters:?}").into(),
+        ]
+        .iter()
+        .collect();
+        fs::create_dir_all(&path).expect("Failed to create baseline latency directory");
+
+        display::action("Downloading baseline_latency.csv files");
+        for (i, instance) in nodes.iter().enumerate() {
+            display::status(format!("{}/{}", i + 1, nodes.len()));
+
+            let authority = i as mysticeti_core::types::AuthorityIndex;
+            let mut remote_path = self
+                .settings
+                .working_dir
+                .join(mysticeti_core::config::NodePrivateConfig::default_storage_path(authority));
+            remote_path.push("baseline_latency.csv");
+            let remote_path = normalize_remote_path(remote_path);
+
+            let connection = self.ssh_manager.connect(instance.ssh_address()).await?;
+            let content = connection.download(remote_path)?;
+
+            let local_file = path.join(format!("node{authority}_baseline_latency.csv"));
+            fs::write(&local_file, content.as_bytes()).expect("Cannot write baseline_latency file");
+        }
+        display::done();
+
+        Ok(())
+    }
+
     /// Run all the benchmarks specified by the benchmark generator.
     pub async fn run_benchmarks(
         &mut self,
@@ -627,10 +666,28 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
                 error_counter.print_summary();
             }
 
+            // Collect baseline_latency.csv from all nodes for offline analysis.
+            self.download_baseline_latency_files(&parameters).await?;
+
             i += 1;
         }
 
         display::header("Benchmark completed");
         Ok(())
     }
+}
+
+/// Convert a path that may start with `~` into a path usable by the SSH subsystem.
+/// The returned path is relative to the remote user's home directory when `~` is used,
+/// and left untouched for absolute paths.
+fn normalize_remote_path(path: PathBuf) -> PathBuf {
+    let mut components = path.components();
+    if let Some(first) = components.next() {
+        if first.as_os_str() == "~" {
+            let mut normalized = PathBuf::new();
+            normalized.extend(components);
+            return normalized;
+        }
+    }
+    path
 }
