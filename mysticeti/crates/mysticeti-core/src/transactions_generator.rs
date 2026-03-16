@@ -92,7 +92,7 @@ impl TransactionGenerator {
             for _ in 0..transactions_per_block_interval {
                 let batch = pevm_scheduler.fetch_batch(1).await;
                 let mut fetched_txn = if let Some(txn) = batch.into_iter().next() {
-                    tracing::debug!("fetched {}-th txn: {:?}", &x, &txn);
+                    // tracing::debug!("fetched {}-th txn: {:?}", &x, &txn);
                     x += 1;
                     txn
                 } else {
@@ -105,17 +105,17 @@ impl TransactionGenerator {
                 block.push(Transaction::new(transaction));
                 block_size += self.client_parameters.transaction_size;
 
-                tracing::debug!(
-                    "Block_size = {}, max_block_size = {}",
-                    block_size,
-                    max_block_size
-                );
+                // tracing::debug!(
+                //     "Block_size = {}, max_block_size = {}",
+                //     block_size,
+                //     max_block_size
+                // );
 
                 counter += 1;
                 tx_to_report += 1;
 
                 if block_size >= max_block_size {
-                    tracing::debug!("block size is full: {}", block_size);
+                    // tracing::debug!("block size is full: {}", block_size);
                     break;
                 }
             }

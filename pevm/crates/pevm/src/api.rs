@@ -159,9 +159,9 @@ impl PevmAPI {
 
     pub async fn add_transactions(&mut self, transactions: Vec<TransactionWithHint>) {
         tracing::info!("Waiting queue lock");
-        let mut queue = self.txns_queue.lock().await;
+        // let mut queue = self.txns_queue.lock().await;
         for txn in transactions {
-            tracing::info!("Adding transaction: {:?}", txn);
+            // tracing::info!("Adding transaction: {:?}", txn);
             queue.push_back(txn);
         }
     }
@@ -169,7 +169,7 @@ impl PevmAPI {
     pub async fn fetch_one_scheduled_txn(&mut self) -> Result<TransactionWithHint, APIError> {
         let mut scheduled_queue = self.scheduled_txns.lock().await;
         if scheduled_queue.is_empty() {
-            tracing::info!("No scheduled transactions");
+            // tracing::info!("No scheduled transactions");
             return Err(APIError::NoScheduledTransactions);
         }
 
@@ -266,7 +266,7 @@ impl PevmExecutor {
 
         match self.execution_mode {
             ExecutionMode::Sequential => {
-                tracing::info!("Executed transactions sequentially");
+                // tracing::info!("Executed transactions sequentially");
                 let result = crate::execute_revm_sequential(
                     &self.chain,
                     &self.storage,
@@ -279,11 +279,11 @@ impl PevmExecutor {
             ExecutionMode::Parallel => {
                 let concurrency_level =
                     thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
-                tracing::info!(
-                    "Starting Executing {} transactions in parallel with {} threads",
-                    &txs.len(),
-                    concurrency_level
-                );
+                // tracing::info!(
+                //     "Starting Executing {} transactions in parallel with {} threads",
+                //     &txs.len(),
+                //     concurrency_level
+                // );
 
                 let result = Pevm::default().execute_revm_parallel(
                     &self.chain,
@@ -293,10 +293,10 @@ impl PevmExecutor {
                     txs,
                     concurrency_level,
                 );
-                tracing::info!(
-                    "Executed transactions in parallel with {} threads",
-                    concurrency_level
-                );
+                // tracing::info!(
+                //     "Executed transactions in parallel with {} threads",
+                //     concurrency_level
+                // );
 
                 match &result {
                     Ok(res) => tracing::info!("Execution successful with {} results", res.len()),
@@ -362,7 +362,7 @@ impl PevmTransactionGenerator {
         tracing::info!("Start Running PEVM");
         loop {
             let batch = self.generate_transactions();
-            tracing::debug!("Generated {} new transactions", batch.len());
+            // tracing::debug!("Generated {} new transactions", batch.len());
             new_transactions.extend(batch);
             if new_transactions.len() >= MAX_PENDING_TRANSACTION_NUM + INITIAL_BATCH {
                 let initial_batch_to_schedule = new_transactions.drain(..INITIAL_BATCH).collect();
@@ -373,7 +373,7 @@ impl PevmTransactionGenerator {
 
         loop {
             let txn_needed = self.insufficient_txn_signal_receiver.recv().await.unwrap();
-            tracing::debug!("txn_needed = {}", txn_needed);
+            // tracing::debug!("txn_needed = {}", txn_needed);
             let batch_to_schedule: Vec<(String, Address)> =
                 new_transactions.drain(..txn_needed).collect();
             self.pevm_txn_sender.send(batch_to_schedule).await;
@@ -440,10 +440,10 @@ impl PevmTransactionGenerator {
     fn generate_contended_erc20_transactions(&mut self) -> Vec<(String, Address)> {
         let random_value = rand::random::<u64>() % self.high_contention_interval.unwrap();
         if random_value != 0 {
-            tracing::debug!("Generating parallelizable transactions");
+            // tracing::debug!("Generating parallelizable transactions");
             return self.generate_parallelizable_erc20_transactions();
         }
-        tracing::debug!("Generating contended transactions");
+        // tracing::debug!("Generating contended transactions");
         const GAS_LIMIT: u64 = 35_000;
         let mut transactions = Vec::with_capacity(50);
 
@@ -526,7 +526,7 @@ impl PevmScheduler {
         let mut rx = self.pevm_txn_receiver.lock().await;
 
         while let Some(batch) = rx.recv().await {
-            tracing::debug!("scheduling {} txns", batch.len());
+            // tracing::debug!("scheduling {} txns", batch.len());
             self.schedule(batch).await;
         }
     }
