@@ -158,8 +158,8 @@ impl PevmAPI {
     }
 
     pub async fn add_transactions(&mut self, transactions: Vec<TransactionWithHint>) {
-        tracing::info!("Waiting queue lock");
-        // let mut queue = self.txns_queue.lock().await;
+        // tracing::info!("Waiting queue lock");
+        let mut queue = self.txns_queue.lock().await;
         for txn in transactions {
             // tracing::info!("Adding transaction: {:?}", txn);
             queue.push_back(txn);
