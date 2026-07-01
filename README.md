@@ -1,49 +1,159 @@
-## Evaluation under network jitter
+# Pufferfish
 
-Under the network jitter condition, we assume nodes fail to perform the direct rules for a while, leading to backlog blocks that cannot be decided. 
+[![build status](https://img.shields.io/github/actions/workflow/status/asonnino/shamir-bip39/code.yml?branch=main&logo=github&style=flat-square)](https://github.com/asonnino/shamir-bip39/actions)
+[![rustc](https://img.shields.io/badge/rustc-1.78+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![license](https://img.shields.io/badge/license-Apache-blue.svg?style=flat-square)](LICENSE)
 
-To simulate such failure conditions (i.e., the direct rules failed to be applied), in our evaluation, we add some latency between some connections among nodes, such that a leader might delay sending its blocks to *m* nodes (where *n/3 < m < 2n/3* to avoid the direct commit or skip rule).
+The code in this branch is a prototype of Pufferfish. It supplements the paper [Masking Ordering Failures in BFT SMR via DAG-based Proactive Pre-Commit Execution](https://eprint.iacr.org/2026/796.pdf) enabling reproducible results. There are no plans to maintain this branch.
 
-```
-cd mysticeti/scripts
-bash jitterrun.sh 
-# with parameters [running_time] [committee_size] [jitter_node_num] [delay_connection_num] [delay_per_connection_in_millisecond] [jitter_start_time] [jitter_duration_in_seconds] [tx_load]
-```
-For example, by executing:
-```
-bash jitterrun.sh 60 4 4 2 3000 10 20 100
-```
+This fork also contains an experimental prototype for speculative pre-commit execution, together with local scripts for latency experiments, ablation studies, and microbenchmarks.
 
-It will run 4 nodes with 4 random nodes that experiences jitter (randomly choosing 2 connections and add 3000 ms delay) for 20 seconds after the node is running 10 seconds. The evaluation will run 60 seconds. The transaction input is 100 tx/s.
-> Note that to guarantee the failure of direct decision, the delay should be set larger than the leader timeout (2s by default).
+## Build
 
-```
-2026-01-22T21:49:35.798548Z DEBUG mysticeti_core::core: Created block A61:[A60,D60,B60,G60,E60,](statements(0))
-
-2026-01-22T21:49:35.802359Z DEBUG try_commit{last_decided=E53}: mysticeti_core::consensus::universal_committer: Decided Skip(F54)
-
-2026-01-22T21:49:35.802417Z DEBUG try_commit{last_decided=E53}: mysticeti_core::consensus::universal_committer: Decided Skip(G55)
-
-2026-01-22T21:49:35.802449Z DEBUG try_commit{last_decided=E53}: mysticeti_core::consensus::universal_committer: Decided Commit(A56)
-
-2026-01-22T21:49:35.802478Z DEBUG try_commit{last_decided=E53}: mysticeti_core::consensus::universal_committer: Decided Commit(B57)
-
-2026-01-22T21:49:35.802527Z DEBUG try_commit{last_decided=E53}: mysticeti_core::consensus::universal_committer: Decided Commit(C58)
+```bash
+cargo build
 ```
 
-Above is the log, showing that many leaders fail to be directly decided; instead, they are decided indirectly from C58.
+For quick validation after local changes:
 
-## Plot the latency figure
-### Single protocol (p50, p90, p99)
-The latency data is stored in `*-validator-*/storage-*/latency.csv`, to plot the latency figure, run
-```
-python3 plot_latency.py --csv [latency file] --output [output name]
-# E.g., python3 plot_latency.py --csv jitterrun-validator-0/storage-0/latency.csv --output jitter_latency.pdf
+```bash
+cargo check
 ```
 
-### Protocol comparison (p50, p90)
-Run
+## Local Experiments
+
+All local experiment wrappers live under [`scripts/`](scripts). They start a local committee with `tmux`, scrape Prometheus metrics from each validator, and write the results into a run directory.
+
+To avoid rebuilding the binary before every run, build once with `cargo build` and then set `SKIP_BUILD=1` in the wrappers below.
+
+### Fast Test
+
+Run a short local committee without network jitter:
+
+```bash
+SKIP_BUILD=1 bash scripts/speculative.sh 4 60
 ```
-python3 plot_comparison.py [the path of all compared .csv files] [output file name]
-# E.g., python3 plot_comparison.py results/local/ comparison.pdf
+
+This runs 4 validators for 60 seconds and writes results to `./results/speculative-<mode>-<timestamp>/`.
+
+### Jitter Run
+
+Run the system with injected network jitter:
+
+```bash
+SKIP_BUILD=1 bash scripts/jitterrun.sh 90 7 1 4 2500 10 50 100
 ```
+
+Arguments:
+
+1. total run duration
+2. committee size
+3. number of jittered validators
+4. delayed outgoing connections per jittered validator
+5. delay in milliseconds
+6. jitter start time in seconds
+7. jitter duration in seconds
+8. client load
+
+## Experiment Modes
+
+Both `speculative.sh` and `jitterrun.sh` accept an optional experiment mode and output directory:
+
+```bash
+SKIP_BUILD=1 bash scripts/speculative.sh 4 60 full ./results/full-dryrun
+SKIP_BUILD=1 bash scripts/jitterrun.sh 90 7 1 4 2500 10 50 100 full ./results/full-jitter
+```
+
+Supported modes:
+
+- `full`: the full speculative design
+- `eac`: execution-after-consensus only
+- `no-aps`: speculative execution with naive all-commit prediction
+- `no-snapshots`: speculative execution without rollback snapshots
+- `eager-snapshots`: speculative execution with eager snapshotting
+
+These modes are intended for ablation studies.
+
+## Ablation Sweep
+
+Run the full ablation matrix:
+
+```bash
+SKIP_BUILD=1 bash scripts/ablation_study.sh jitter ./results/ablation-jitter
+```
+
+For a no-jitter sweep:
+
+```bash
+SKIP_BUILD=1 bash scripts/ablation_study.sh dryrun ./results/ablation-dryrun
+```
+
+By default the sweep covers:
+
+- `full`
+- `eac`
+- `no-aps`
+- `no-snapshots`
+- `eager-snapshots`
+
+You can override the set with `MODES="..."`.
+
+## Microbenchmark Sweep
+
+Run a simple load sweep for a chosen mode:
+
+```bash
+SKIP_BUILD=1 MODE=full SWEEP_LOADS="25 50 75 100 125" bash scripts/microbench.sh ./results/microbench-load
+```
+
+This repeatedly invokes `jitterrun.sh` while varying the offered load.
+
+## Output Format
+
+Each run directory contains:
+
+- `validator-*.metrics`: scraped Prometheus metrics for each validator
+- `v*.log.ansi`: validator logs
+- `run-meta.txt`: run configuration
+- `summary.csv`: condensed metrics generated by [`scripts/summarize_metrics.py`](scripts/summarize_metrics.py)
+
+The summary currently extracts the most useful paper-facing metrics, including:
+
+- `transaction_committed_latency`
+- `block_execution_latency`
+- `block_consensus_latency`
+- `submitted_transactions`
+- `speculative_messages_total`
+- `speculative_predictions_total`
+- `speculative_snapshot_total`
+- `speculative_execution_leaders_total`
+- `speculative_prefix_matched_leaders_total`
+- `speculative_reexecuted_leaders_total`
+- `speculative_snapshot_window_size`
+- `speculative_snapshot_store_size`
+
+Example raw metrics:
+
+```text
+block_execution_latency{v="count"} 6570
+block_execution_latency{v="p50"} 530
+block_execution_latency{v="p90"} 2848
+block_execution_latency{v="p99"} 5233
+block_execution_latency{v="sum"} 6989851
+
+transaction_committed_latency{v="count"} 47200
+transaction_committed_latency{v="p50"} 62850
+transaction_committed_latency{v="p90"} 82400
+transaction_committed_latency{v="p99"} 752120
+transaction_committed_latency{v="sum"} 3690243727
+```
+
+## Notes
+
+- The wrappers use `tmux` and expect it to be available locally.
+- The current scripts are designed for local experimentation and paper evaluation, not production deployment.
+- `cargo fmt --all` may also reformat files in the sibling `pevm` dependency if both live in the same workspace checkout.
+
+## License
+
+This software is licensed as [Apache 2.0](LICENSE).

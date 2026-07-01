@@ -9,13 +9,13 @@ use std::{
     time::Duration,
 };
 
-use clap::{command, Parser};
+use clap::{command, Parser, ValueEnum};
 use eyre::{eyre, Context, Result};
 use mysticeti_core::{
     committee::Committee,
     config::{
         ClientParameters, ImportExport, NetworkJitterSimulation, NodeParameters, NodePrivateConfig,
-        NodePublicConfig,
+        NodePublicConfig, SpeculationPredictionPolicy, SpeculationSnapshotPolicy,
     },
     types::AuthorityIndex,
     validator::Validator,
@@ -27,6 +27,15 @@ use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
 struct Args {
     #[clap(subcommand)]
     operation: Operation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ExperimentMode {
+    Full,
+    Eac,
+    NoAps,
+    NoSnapshots,
+    EagerSnapshots,
 }
 
 #[derive(Parser)]
@@ -76,6 +85,9 @@ enum Operation {
         /// The number of authorities in the committee.
         #[clap(long, value_name = "INT")]
         committee_size: usize,
+        /// Experiment mode used for ablation studies.
+        #[clap(long, value_enum, default_value_t = ExperimentMode::Full)]
+        experiment_mode: ExperimentMode,
     },
     /// Deploy a local validator with network jitter simulation for test.
     JitterRun {
@@ -103,6 +115,9 @@ enum Operation {
         /// The transaction load
         #[clap(long, value_name = "INT")]
         load: usize,
+        /// Experiment mode used for ablation studies.
+        #[clap(long, value_enum, default_value_t = ExperimentMode::Full)]
+        experiment_mode: ExperimentMode,
     },
 }
 
@@ -149,7 +164,8 @@ async fn main() -> Result<()> {
         Operation::DryRun {
             authority,
             committee_size,
-        } => dryrun(authority, committee_size).await?,
+            experiment_mode,
+        } => dryrun(authority, committee_size, experiment_mode).await?,
         Operation::JitterRun {
             authority,
             committee_size,
@@ -159,6 +175,7 @@ async fn main() -> Result<()> {
             start_time,
             duration_secs,
             load,
+            experiment_mode,
         } => {
             jitterrun(
                 authority,
@@ -169,6 +186,7 @@ async fn main() -> Result<()> {
                 start_time,
                 duration_secs,
                 load,
+                experiment_mode,
             )
             .await?;
         }
@@ -295,7 +313,11 @@ async fn run(
     Ok(())
 }
 
-async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> {
+async fn dryrun(
+    authority: AuthorityIndex,
+    committee_size: usize,
+    experiment_mode: ExperimentMode,
+) -> Result<()> {
     tracing::warn!(
         "Starting validator {authority} in dryrun mode (committee size: {committee_size})"
     );
@@ -310,7 +332,10 @@ async fn dryrun(authority: AuthorityIndex, committee_size: usize) -> Result<()> 
         num_families_per_cluster,
         num_people_per_family,
     );
-    let node_parameters = NodeParameters::default().with_pevm_workload_type(workload_type);
+    let node_parameters = apply_experiment_mode(
+        NodeParameters::default().with_pevm_workload_type(workload_type),
+        experiment_mode,
+    );
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryrun-validator-{authority}"));
@@ -373,6 +398,7 @@ async fn jitterrun(
     start_time: u64,
     duration_secs: u64,
     load: usize,
+    experiment_mode: ExperimentMode,
 ) -> Result<()> {
     tracing::warn!(
         "Starting validator {authority} in net jitter simulation mode (committee size: {committee_size}, fault num: {fault_num}, jitter ms: {jitter_ms}, duration secs: {duration_secs})"
@@ -402,7 +428,10 @@ async fn jitterrun(
         jitter_duration,
     );
 
-    let mut node_parameters = NodeParameters::default().with_pevm_workload_type(workload_type);
+    let mut node_parameters = apply_experiment_mode(
+        NodeParameters::default().with_pevm_workload_type(workload_type),
+        experiment_mode,
+    );
     node_parameters.network_jitter_simulation = Some(network_jitter_simulation_para);
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
@@ -455,4 +484,29 @@ async fn jitterrun(
     network_result.expect("Validator crashed");
 
     Ok(())
+}
+
+fn apply_experiment_mode(
+    node_parameters: NodeParameters,
+    experiment_mode: ExperimentMode,
+) -> NodeParameters {
+    match experiment_mode {
+        ExperimentMode::Full => node_parameters,
+        ExperimentMode::Eac => node_parameters
+            .with_speculative_execution(false)
+            .with_speculation_prediction_policy(SpeculationPredictionPolicy::Adaptive)
+            .with_snapshot_policy(SpeculationSnapshotPolicy::None),
+        ExperimentMode::NoAps => node_parameters
+            .with_speculative_execution(true)
+            .with_speculation_prediction_policy(SpeculationPredictionPolicy::AllCommit)
+            .with_snapshot_policy(SpeculationSnapshotPolicy::Adaptive),
+        ExperimentMode::NoSnapshots => node_parameters
+            .with_speculative_execution(true)
+            .with_speculation_prediction_policy(SpeculationPredictionPolicy::Adaptive)
+            .with_snapshot_policy(SpeculationSnapshotPolicy::None),
+        ExperimentMode::EagerSnapshots => node_parameters
+            .with_speculative_execution(true)
+            .with_speculation_prediction_policy(SpeculationPredictionPolicy::Adaptive)
+            .with_snapshot_policy(SpeculationSnapshotPolicy::Eager),
+    }
 }

@@ -170,6 +170,7 @@ impl Validator {
             evm_executor,
             speculative_message_receiver,
             node_reputation,
+            public_config.parameters.speculation_snapshot_policy,
             metrics.clone(),
         );
 

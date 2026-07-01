@@ -19,7 +19,7 @@ use crate::{
         WAL_ENTRY_STATE,
     },
     committee::Committee,
-    config::{NodePrivateConfig, NodePublicConfig},
+    config::{NodePrivateConfig, NodePublicConfig, SpeculationPredictionPolicy},
     consensus::{
         linearizer::{CommittedSubDag, Linearizer},
         universal_committer::{UniversalCommitter, UniversalCommitterBuilder},
@@ -69,6 +69,8 @@ pub struct Core<H: BlockHandler> {
     consensus_linearizer: Linearizer,
     /// Speculative linearizer: used to trace the speculative committed blocks
     speculative_linearizer: Linearizer,
+    enable_speculative_execution: bool,
+    speculation_prediction_policy: SpeculationPredictionPolicy,
 }
 
 pub struct CoreOptions {
@@ -194,6 +196,8 @@ impl<H: BlockHandler> Core<H> {
             aps_tree_sub_dags: Vec::new(),
             consensus_linearizer,
             speculative_linearizer,
+            enable_speculative_execution: public_config.parameters.enable_speculative_execution,
+            speculation_prediction_policy: public_config.parameters.speculation_prediction_policy,
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -284,11 +288,15 @@ impl<H: BlockHandler> Core<H> {
                         .speculative_linearizer
                         .handle_commit(&self.block_store, speculative_leaders.clone());
 
-                    if !new_speculative_subdags.is_empty() {
+                    if self.enable_speculative_execution && !new_speculative_subdags.is_empty() {
                         self.aps_tree_sub_dags
                             .extend(new_speculative_subdags.clone());
                         // we only send new sub dags to reduce message size
                         // this is feasible since the channel has FIFO property
+                        self.metrics
+                            .speculative_messages_total
+                            .with_label_values(&["speculative"])
+                            .inc();
                         if let Err(e) = self.speculative_message_sender.blocking_send(
                             SpeculativeMessage::ExecuteTxs(
                                 self.aps_tree.clone(),
@@ -419,7 +427,10 @@ impl<H: BlockHandler> Core<H> {
     ) -> Vec<LeaderPrediction> {
         let mut new_predicted_leaders = Vec::new();
         for r in last_predicted_round + 1..=start_round {
-            let leader_status = self.committer.predict_leader_status(r);
+            let leader_status = match self.speculation_prediction_policy {
+                SpeculationPredictionPolicy::Adaptive => self.committer.predict_leader_status(r),
+                SpeculationPredictionPolicy::AllCommit => self.predict_all_commit_leader_status(r),
+            };
             let leader_prediction = match leader_status {
                 LeaderStatus::Commit(leader_block) => LeaderPrediction::new(
                     r,
@@ -442,6 +453,19 @@ impl<H: BlockHandler> Core<H> {
             new_predicted_leaders.push(leader_prediction);
         }
         new_predicted_leaders
+    }
+
+    fn predict_all_commit_leader_status(&self, round: RoundNumber) -> LeaderStatus {
+        for leader in self.committer.get_leaders(round) {
+            let leader_blocks = self
+                .block_store
+                .get_blocks_at_authority_round(leader, round);
+            if let Some(block) = leader_blocks.first() {
+                return LeaderStatus::Commit(block.clone());
+            }
+            return LeaderStatus::Skip(leader, round);
+        }
+        LeaderStatus::Undecided(0, round)
     }
 
     pub fn wal_syncer(&self) -> WalSyncer {
@@ -542,6 +566,10 @@ impl<H: BlockHandler> Core<H> {
                 SpeculativeMessageStatus::Consensus,
             ))
             .expect("Failed to send committed ordered blocks to speculative executor");
+        self.metrics
+            .speculative_messages_total
+            .with_label_values(&["consensus"])
+            .inc();
 
         // update consensus linearizer and epoch manager
         let mut commit_data = vec![];

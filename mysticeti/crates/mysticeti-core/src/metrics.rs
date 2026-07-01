@@ -69,6 +69,15 @@ pub struct Metrics {
     pub block_execution_latency: HistogramSender<Duration>,
     pub block_consensus_latency: HistogramSender<Duration>,
 
+    pub speculative_messages_total: IntCounterVec,
+    pub speculative_predictions_total: IntCounterVec,
+    pub speculative_snapshot_total: IntCounterVec,
+    pub speculative_execution_leaders_total: IntCounterVec,
+    pub speculative_prefix_matched_leaders_total: IntCounter,
+    pub speculative_reexecuted_leaders_total: IntCounter,
+    pub speculative_snapshot_window_size: IntGauge,
+    pub speculative_snapshot_store_size: IntGauge,
+
     pub proposed_block_size_bytes: HistogramSender<usize>,
     pub proposed_block_transaction_count: HistogramSender<usize>,
     pub proposed_block_vote_count: HistogramSender<usize>,
@@ -336,6 +345,59 @@ impl Metrics {
                 "block_sync_requests_received",
                 "Number of block sync requests received per authority and whether they have been fulfilled",
                 &["authority", "fulfilled"],
+                registry,
+            )
+            .unwrap(),
+
+            speculative_messages_total: register_int_counter_vec_with_registry!(
+                "speculative_messages_total",
+                "Total speculative executor messages by type",
+                &["kind"],
+                registry,
+            )
+            .unwrap(),
+            speculative_predictions_total: register_int_counter_vec_with_registry!(
+                "speculative_predictions_total",
+                "Prediction outcomes observed at consensus time",
+                &["outcome"],
+                registry,
+            )
+            .unwrap(),
+            speculative_snapshot_total: register_int_counter_vec_with_registry!(
+                "speculative_snapshot_total",
+                "Snapshots taken or reused by the speculative executor",
+                &["kind"],
+                registry,
+            )
+            .unwrap(),
+            speculative_execution_leaders_total: register_int_counter_vec_with_registry!(
+                "speculative_execution_leaders_total",
+                "Leaders executed by speculative or consensus paths",
+                &["phase"],
+                registry,
+            )
+            .unwrap(),
+            speculative_prefix_matched_leaders_total: register_int_counter_with_registry!(
+                "speculative_prefix_matched_leaders_total",
+                "Total number of consensus leaders matched by speculative snapshots",
+                registry,
+            )
+            .unwrap(),
+            speculative_reexecuted_leaders_total: register_int_counter_with_registry!(
+                "speculative_reexecuted_leaders_total",
+                "Total number of consensus leaders re-executed after snapshot matching",
+                registry,
+            )
+            .unwrap(),
+            speculative_snapshot_window_size: register_int_gauge_with_registry!(
+                "speculative_snapshot_window_size",
+                "Current number of snapshots retained in the sliding speculative window",
+                registry,
+            )
+            .unwrap(),
+            speculative_snapshot_store_size: register_int_gauge_with_registry!(
+                "speculative_snapshot_store_size",
+                "Current number of retained speculative snapshots outside the sliding window",
                 registry,
             )
             .unwrap(),

@@ -6,6 +6,7 @@ pub use ethers::types::Address;
 use pevm::api::{PevmExecutor, TransactionWithHint};
 
 use crate::{
+    config::SpeculationSnapshotPolicy,
     consensus::linearizer::CommittedSubDag,
     metrics::Metrics,
     node_reputation::NodeReputation,
@@ -44,6 +45,7 @@ pub struct SpeculativeExecutor {
     pub node_reputation: NodeReputation,
     /// The latest committed base state
     pub committed_base_state: EvmStateWriteSet,
+    snapshot_policy: SpeculationSnapshotPolicy,
     metrics: Arc<Metrics>,
 }
 
@@ -52,6 +54,7 @@ impl SpeculativeExecutor {
         pevm_executor: PevmExecutor,
         speculative_message_receiver: mpsc::Receiver<SpeculativeMessage>,
         node_reputation: NodeReputation,
+        snapshot_policy: SpeculationSnapshotPolicy,
         metrics: Arc<Metrics>,
     ) {
         runtime::Handle::current().spawn(async move {
@@ -68,6 +71,7 @@ impl SpeculativeExecutor {
                 snapshot_window: VecDeque::with_capacity(SNAPSHOT_WINDOW),
                 node_reputation,
                 committed_base_state: EvmStateWriteSet::default(),
+                snapshot_policy,
                 metrics,
             }
             .run()
@@ -169,6 +173,10 @@ impl SpeculativeExecutor {
 
         // for the consensus message, sub_dags is the newly committed anchors
         let committed_leaders: Vec<BlockReference> = sub_dags.iter().map(|sd| sd.anchor).collect();
+        self.metrics
+            .speculative_execution_leaders_total
+            .with_label_values(&["consensus_committed"])
+            .inc_by(committed_leaders.len() as u64);
 
         // Execute the committed blocks (based on the speculative execution snapshots)
         let new_states = self.consensus_execution_on_blocks(&sub_dags).await;
@@ -224,15 +232,31 @@ impl SpeculativeExecutor {
             let hit = committed_leaders_rounds.contains(&predicted.round);
             match (predicted.status, hit) {
                 (LeaderPredictionStatus::Committed, true) => {
+                    self.metrics
+                        .speculative_predictions_total
+                        .with_label_values(&["commit_hit"])
+                        .inc();
                     self.node_reputation.update_score(predicted.author, 1)
                 } // correct
                 (LeaderPredictionStatus::Committed, false) => {
+                    self.metrics
+                        .speculative_predictions_total
+                        .with_label_values(&["commit_miss"])
+                        .inc();
                     self.node_reputation.update_score(predicted.author, -1)
                 } // incorrect
                 (LeaderPredictionStatus::Skipped, true) => {
+                    self.metrics
+                        .speculative_predictions_total
+                        .with_label_values(&["skip_miss"])
+                        .inc();
                     self.node_reputation.update_score(predicted.author, -1)
                 } // missed
                 (LeaderPredictionStatus::Skipped, false) => {
+                    self.metrics
+                        .speculative_predictions_total
+                        .with_label_values(&["skip_hit"])
+                        .inc();
                     self.node_reputation.update_score(predicted.author, 1)
                 } // correct skip
             }
@@ -251,6 +275,7 @@ impl SpeculativeExecutor {
                     self.committed_base_state.clone(),
                 ));
         }
+        self.update_snapshot_gauges();
     }
 
     /// perform speculative execution on the ordered blocks
@@ -274,10 +299,8 @@ impl SpeculativeExecutor {
                 tokio::task::yield_now().await;
             }
 
-            if self.node_reputation.get_score(sub_dag.anchor.authority)
-                < self.node_reputation.threshold_score()
-            {
-                // we take snapshot if the next leader is likely malicious
+            if self.should_take_snapshot(sub_dag.anchor.authority) {
+                self.record_snapshot("pre_exec");
                 self.snapshots.push(SpeculativeExecutionSnapshot::new(
                     new_ordered_leaders.clone(),
                     new_state.clone(),
@@ -315,6 +338,10 @@ impl SpeculativeExecutor {
                     .block_execution_latency
                     .observe(end_execution_time / block_count as u32);
             }
+            self.metrics
+                .speculative_execution_leaders_total
+                .with_label_values(&["speculative"])
+                .inc();
 
             new_ordered_leaders.push(sub_dag.anchor);
 
@@ -328,6 +355,7 @@ impl SpeculativeExecutor {
                     new_state.clone(),
                 ));
         }
+        self.update_snapshot_gauges();
     }
 
     /// perform consensus execution on the committed ordered blocks
@@ -345,6 +373,16 @@ impl SpeculativeExecutor {
                 let target_leaders: Vec<BlockReference> =
                     sub_dags.iter().map(|sd| sd.anchor).collect();
                 let hit_count = common_prefix_length(&snapshot.ordered_leaders, &target_leaders);
+                self.metrics
+                    .speculative_prefix_matched_leaders_total
+                    .inc_by(hit_count as u64);
+                self.metrics
+                    .speculative_reexecuted_leaders_total
+                    .inc_by((sub_dags.len() - hit_count) as u64);
+                self.metrics
+                    .speculative_snapshot_total
+                    .with_label_values(&["reuse"])
+                    .inc();
                 tracing::debug!(
                     "Consensus execution: found matching snapshot with {} leaders, executing {} new leader blocks on top",
                     hit_count,
@@ -392,6 +430,10 @@ impl SpeculativeExecutor {
                             .block_execution_latency
                             .observe(end_execution_time / block_count as u32);
                     }
+                    self.metrics
+                        .speculative_execution_leaders_total
+                        .with_label_values(&["consensus_reexecuted"])
+                        .inc();
                 }
 
                 tracing::debug! {"(matched) Block execution time {:?}", start_execution_time.elapsed()};
@@ -403,6 +445,9 @@ impl SpeculativeExecutor {
                     "Consensus execution: no matching snapshot found, execute {} leader blocks",
                     sub_dags.len()
                 );
+                self.metrics
+                    .speculative_reexecuted_leaders_total
+                    .inc_by(sub_dags.len() as u64);
                 let mut new_state = self.committed_base_state.clone();
 
                 // Clone executor Arc once outside the loop
@@ -445,6 +490,10 @@ impl SpeculativeExecutor {
                             .block_execution_latency
                             .observe(end_execution_time / block_count as u32);
                     }
+                    self.metrics
+                        .speculative_execution_leaders_total
+                        .with_label_values(&["consensus_reexecuted"])
+                        .inc();
                 }
 
                 tracing::debug! {"(unmatched) Block execution time {:?}", start_execution_time.elapsed()};
@@ -458,6 +507,7 @@ impl SpeculativeExecutor {
                         sub_dags.iter().map(|sd| sd.anchor).collect(),
                         new_state.clone(),
                     ));
+                self.update_snapshot_gauges();
 
                 new_state
             }
@@ -531,6 +581,33 @@ impl SpeculativeExecutor {
             }
         }
         self.snapshot_window = updated_window;
+        self.update_snapshot_gauges();
+    }
+
+    fn should_take_snapshot(&self, authority: crate::types::AuthorityIndex) -> bool {
+        match self.snapshot_policy {
+            SpeculationSnapshotPolicy::Adaptive => {
+                self.node_reputation.get_score(authority) < self.node_reputation.threshold_score()
+            }
+            SpeculationSnapshotPolicy::None => false,
+            SpeculationSnapshotPolicy::Eager => true,
+        }
+    }
+
+    fn record_snapshot(&self, kind: &str) {
+        self.metrics
+            .speculative_snapshot_total
+            .with_label_values(&[kind])
+            .inc();
+    }
+
+    fn update_snapshot_gauges(&self) {
+        self.metrics
+            .speculative_snapshot_window_size
+            .set(self.snapshot_window.len() as i64);
+        self.metrics
+            .speculative_snapshot_store_size
+            .set(self.snapshots.len() as i64);
     }
 }
 

@@ -52,8 +52,14 @@ pub struct NodeParameters {
     pub enable_synchronizer: bool,
     #[serde(default = "node_defaults::default_enable_pevm_executor")]
     pub enable_pevm_executor: bool,
+    #[serde(default = "node_defaults::default_enable_speculative_execution")]
+    pub enable_speculative_execution: bool,
     #[serde(default = "node_defaults::default_pevm_workload_type")]
     pub pevm_workload_type: pevm::api::WorkloadType,
+    #[serde(default = "node_defaults::default_speculation_prediction_policy")]
+    pub speculation_prediction_policy: SpeculationPredictionPolicy,
+    #[serde(default = "node_defaults::default_snapshot_policy")]
+    pub speculation_snapshot_policy: SpeculationSnapshotPolicy,
     #[serde(default = "node_defaults::default_reputation_threshold_deviation")]
     pub reputation_threshold_deviation: u64,
     #[serde(default = "node_defaults::default_reputation_threshold_numerator")]
@@ -64,6 +70,19 @@ pub struct NodeParameters {
     pub initial_score: i128,
     #[serde(default = "node_defaults::default_network_jitter_simulation")]
     pub network_jitter_simulation: Option<NetworkJitterSimulation>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeculationPredictionPolicy {
+    Adaptive,
+    AllCommit,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeculationSnapshotPolicy {
+    Adaptive,
+    None,
+    Eager,
 }
 
 pub mod node_defaults {
@@ -107,8 +126,20 @@ pub mod node_defaults {
         true
     }
 
+    pub fn default_enable_speculative_execution() -> bool {
+        true
+    }
+
     pub fn default_pevm_workload_type() -> pevm::api::WorkloadType {
         pevm::api::WorkloadType::ERC20(5, 5, 8)
+    }
+
+    pub fn default_speculation_prediction_policy() -> super::SpeculationPredictionPolicy {
+        super::SpeculationPredictionPolicy::Adaptive
+    }
+
+    pub fn default_snapshot_policy() -> super::SpeculationSnapshotPolicy {
+        super::SpeculationSnapshotPolicy::Adaptive
     }
 
     pub fn default_reputation_threshold_deviation() -> u64 {
@@ -146,7 +177,10 @@ impl Default for NodeParameters {
             consensus_only: node_defaults::default_consensus_only(),
             enable_synchronizer: node_defaults::default_enable_synchronizer(),
             enable_pevm_executor: node_defaults::default_enable_pevm_executor(),
+            enable_speculative_execution: node_defaults::default_enable_speculative_execution(),
             pevm_workload_type: node_defaults::default_pevm_workload_type(),
+            speculation_prediction_policy: node_defaults::default_speculation_prediction_policy(),
+            speculation_snapshot_policy: node_defaults::default_snapshot_policy(),
             reputation_threshold_deviation: node_defaults::default_reputation_threshold_deviation(),
             reputation_threshold_numerator: node_defaults::default_reputation_threshold_numerator(),
             reputation_threshold_denominator:
@@ -162,6 +196,24 @@ impl ImportExport for NodeParameters {}
 impl NodeParameters {
     pub fn with_pevm_workload_type(mut self, workload_type: pevm::api::WorkloadType) -> Self {
         self.pevm_workload_type = workload_type;
+        self
+    }
+
+    pub fn with_speculative_execution(mut self, enable: bool) -> Self {
+        self.enable_speculative_execution = enable;
+        self
+    }
+
+    pub fn with_speculation_prediction_policy(
+        mut self,
+        policy: SpeculationPredictionPolicy,
+    ) -> Self {
+        self.speculation_prediction_policy = policy;
+        self
+    }
+
+    pub fn with_snapshot_policy(mut self, policy: SpeculationSnapshotPolicy) -> Self {
+        self.speculation_snapshot_policy = policy;
         self
     }
 }
