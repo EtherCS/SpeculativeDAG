@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="${2:-}"
+
+# Avoid changing merge/squash/rebase-generated commit messages.
+case "$COMMIT_SOURCE" in
+  merge|squash|commit)
+    exit 0
+    ;;
+esac
+
+# Only run if there are staged changes.
+if git diff --cached --quiet; then
+  exit 0
+fi
+
+# Avoid running if the message already has content, e.g., git commit -m "...".
+# You can remove this block if you want Codex to rewrite -m messages too.
+if [ -s "$COMMIT_MSG_FILE" ] && grep -qv '^\s*#' "$COMMIT_MSG_FILE"; then
+  if ! grep -q "^Co-authored-by: Codex <noreply@openai.com>$" "$COMMIT_MSG_FILE"; then
+    printf "\nCo-authored-by: Codex <noreply@openai.com>\n" >> "$COMMIT_MSG_FILE"
+  fi
+  exit 0
+fi
+
+# Generate commit message using Codex.
+MSG="$(codex exec "
+Summarize the staged Git diff into a concise commit message.
+
+Requirements:
+- First line: imperative mood, <= 72 characters.
+- Then a blank line.
+- Then 2-4 bullet points explaining the main changes.
+- Do not include markdown code fences.
+- Do not include Co-authored-by trailers.
+Use only the staged diff shown by: git diff --cached.
+")"
+
+{
+  echo "$MSG"
+  echo
+  echo "Co-authored-by: Codex <noreply@openai.com>"
+} > "$COMMIT_MSG_FILE"
