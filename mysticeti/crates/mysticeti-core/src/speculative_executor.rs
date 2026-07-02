@@ -268,7 +268,9 @@ impl SpeculativeExecutor {
         // If cleanup wiped all snapshots (misprediction case), seed a base
         // snapshot from the committed state so future speculative executions
         // build on the correct committed base rather than empty state.
-        if self.snapshot_window.is_empty() {
+        if self.snapshot_window.is_empty()
+            && self.snapshot_policy != SpeculationSnapshotPolicy::None
+        {
             self.snapshot_window
                 .push_back(SpeculativeExecutionSnapshot::new(
                     Vec::new(),
@@ -346,14 +348,26 @@ impl SpeculativeExecutor {
             new_ordered_leaders.push(sub_dag.anchor);
 
             // we take snapshot after speculative execution if the next leader is likely correct
-            if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
-                self.snapshot_window.pop_front();
+            if self.snapshot_policy != SpeculationSnapshotPolicy::None {
+                if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
+                    self.snapshot_window.pop_front();
+                }
+                self.snapshot_window
+                    .push_back(SpeculativeExecutionSnapshot::new(
+                        new_ordered_leaders.clone(),
+                        new_state.clone(),
+                    ));
+            } else {
+                // If snapshot policy is None, we only keep the last executed state for future speculative execution
+                if self.snapshot_window.len() >= 1 {
+                    self.snapshot_window.pop_front();
+                }
+                self.snapshot_window
+                    .push_back(SpeculativeExecutionSnapshot::new(
+                        new_ordered_leaders.clone(),
+                        new_state.clone(),
+                    ));
             }
-            self.snapshot_window
-                .push_back(SpeculativeExecutionSnapshot::new(
-                    new_ordered_leaders.clone(),
-                    new_state.clone(),
-                ));
         }
         self.update_snapshot_gauges();
     }
@@ -499,14 +513,16 @@ impl SpeculativeExecutor {
                 tracing::debug! {"(unmatched) Block execution time {:?}", start_execution_time.elapsed()};
 
                 // Seed a snapshot from this consensus execution so the next batch has a match
-                if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
-                    self.snapshot_window.pop_front();
+                if self.snapshot_policy != SpeculationSnapshotPolicy::None {
+                    if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
+                        self.snapshot_window.pop_front();
+                    }
+                    self.snapshot_window
+                        .push_back(SpeculativeExecutionSnapshot::new(
+                            sub_dags.iter().map(|sd| sd.anchor).collect(),
+                            new_state.clone(),
+                        ));
                 }
-                self.snapshot_window
-                    .push_back(SpeculativeExecutionSnapshot::new(
-                        sub_dags.iter().map(|sd| sd.anchor).collect(),
-                        new_state.clone(),
-                    ));
                 self.update_snapshot_gauges();
 
                 new_state
