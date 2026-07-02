@@ -267,52 +267,54 @@ impl<H: BlockHandler> Core<H> {
         // upon entering a new round, do speculative execution
         // we assume round 1 is the first round that can be committed (todo: make it configurable)
         if clock_round > 2 {
-            let new_leader_predictions =
-                self.add_leaders_to_aps_tree(clock_round - 2, self.aps_tree.last_predicted_round());
-            match self
-                .aps_tree
-                .add_leader_predictions(new_leader_predictions.clone())
-            {
-                Ok(_speculative_executions) => {
-                    // linearlizer is used to collect committed sub-dags from speculative ordered leader blocks
-                    let speculative_leaders: Vec<Data<StatementBlock>> = new_leader_predictions
-                        .iter()
-                        .filter(|p| {
-                            p.status == LeaderPredictionStatus::Committed
-                                && p.leader_block.is_some()
-                        })
-                        .filter_map(|p| p.leader_block.clone())
-                        .collect();
+            if self.enable_speculative_execution {
+                let new_leader_predictions = self
+                    .add_leaders_to_aps_tree(clock_round - 2, self.aps_tree.last_predicted_round());
+                match self
+                    .aps_tree
+                    .add_leader_predictions(new_leader_predictions.clone())
+                {
+                    Ok(_speculative_executions) => {
+                        // linearlizer is used to collect committed sub-dags from speculative ordered leader blocks
+                        let speculative_leaders: Vec<Data<StatementBlock>> = new_leader_predictions
+                            .iter()
+                            .filter(|p| {
+                                p.status == LeaderPredictionStatus::Committed
+                                    && p.leader_block.is_some()
+                            })
+                            .filter_map(|p| p.leader_block.clone())
+                            .collect();
 
-                    let new_speculative_subdags = self
-                        .speculative_linearizer
-                        .handle_commit(&self.block_store, speculative_leaders.clone());
+                        let new_speculative_subdags = self
+                            .speculative_linearizer
+                            .handle_commit(&self.block_store, speculative_leaders.clone());
 
-                    if self.enable_speculative_execution && !new_speculative_subdags.is_empty() {
-                        self.aps_tree_sub_dags
-                            .extend(new_speculative_subdags.clone());
-                        // we only send new sub dags to reduce message size
-                        // this is feasible since the channel has FIFO property
-                        self.metrics
-                            .speculative_messages_total
-                            .with_label_values(&["speculative"])
-                            .inc();
-                        if let Err(e) = self.speculative_message_sender.blocking_send(
-                            SpeculativeMessage::ExecuteTxs(
-                                self.aps_tree.clone(),
-                                new_speculative_subdags,
-                                SpeculativeMessageStatus::Speculative,
-                            ),
-                        ) {
-                            tracing::error!(
-                                "Failed to deliver speculative message to executor: {:?}",
-                                e
-                            );
+                        if !new_speculative_subdags.is_empty() {
+                            self.aps_tree_sub_dags
+                                .extend(new_speculative_subdags.clone());
+                            // we only send new sub dags to reduce message size
+                            // this is feasible since the channel has FIFO property
+                            self.metrics
+                                .speculative_messages_total
+                                .with_label_values(&["speculative"])
+                                .inc();
+                            if let Err(e) = self.speculative_message_sender.blocking_send(
+                                SpeculativeMessage::ExecuteTxs(
+                                    self.aps_tree.clone(),
+                                    new_speculative_subdags,
+                                    SpeculativeMessageStatus::Speculative,
+                                ),
+                            ) {
+                                tracing::error!(
+                                    "Failed to deliver speculative message to executor: {:?}",
+                                    e
+                                );
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to add leader predictions to APS tree: {}", e);
+                    Err(e) => {
+                        tracing::error!("Failed to add leader predictions to APS tree: {}", e);
+                    }
                 }
             }
         }
@@ -556,21 +558,55 @@ impl<H: BlockHandler> Core<H> {
         if committed.is_empty() {
             return vec![];
         }
-        let (consistent_committed_leader_num, decided_leader_num) =
-            self.check_speculative_consensus_consistency(&committed);
-        // send the final consensus order to speculative executor for commitment
-        self.speculative_message_sender
-            .blocking_send(SpeculativeMessage::ExecuteTxs(
-                self.aps_tree.clone(),
-                committed.clone(),
-                SpeculativeMessageStatus::Consensus,
-            ))
-            .expect("Failed to send committed ordered blocks to speculative executor");
-        self.metrics
-            .speculative_messages_total
-            .with_label_values(&["consensus"])
-            .inc();
+        if self.enable_speculative_execution {
+            let (consistent_committed_leader_num, decided_leader_num) =
+                self.check_speculative_consensus_consistency(&committed);
+            // send the final consensus order to speculative executor for commitment
+            self.speculative_message_sender
+                .blocking_send(SpeculativeMessage::ExecuteTxs(
+                    self.aps_tree.clone(),
+                    committed.clone(),
+                    SpeculativeMessageStatus::Consensus,
+                ))
+                .expect("Failed to send committed ordered blocks to speculative executor");
+            self.metrics
+                .speculative_messages_total
+                .with_label_values(&["consensus"])
+                .inc();
 
+            // update APS tree and its corresponding sub dags
+            self.aps_tree.start_round += decided_leader_num as RoundNumber;
+            self.aps_tree.pending_leaders.drain(0..decided_leader_num);
+            if consistent_committed_leader_num == committed.len() {
+                tracing::debug!(
+                    "Happy path: speculative APS tree is consistent with consensus committed order",
+                );
+                self.aps_tree_sub_dags
+                    .drain(0..consistent_committed_leader_num);
+            } else {
+                tracing::debug!(
+                    "Fallback path: speculative APS tree is inconsistent with consensus committed order",
+                );
+                self.speculative_linearizer.committed = self.consensus_linearizer.committed.clone();
+                self.aps_tree_sub_dags.clear();
+                // rebuild sub dags with the new aps tree
+                let remaining_predicted_committed_leaders = self
+                    .aps_tree
+                    .get_predict_committed_leader_blocks_since_round(self.aps_tree.start_round);
+                self.aps_tree_sub_dags = self.speculative_linearizer.handle_commit(
+                    &self.block_store,
+                    remaining_predicted_committed_leaders.clone(),
+                );
+            }
+        } else {
+            self.speculative_message_sender
+                .blocking_send(SpeculativeMessage::ExecuteTxs(
+                    self.aps_tree.clone(),
+                    committed.clone(),
+                    SpeculativeMessageStatus::Consensus,
+                ))
+                .expect("Failed to send committed ordered blocks to speculative executor");
+        }
         // update consensus linearizer and epoch manager
         let mut commit_data = vec![];
         for commit in &committed {
@@ -588,31 +624,6 @@ impl<H: BlockHandler> Core<H> {
         self.write_commits(&commit_data, state);
         // todo - We should also persist state of the epoch manager, otherwise if validator
         // restarts during epoch change it will fork on the epoch change state.
-
-        // update APS tree and its corresponding sub dags
-        self.aps_tree.start_round += decided_leader_num as RoundNumber;
-        self.aps_tree.pending_leaders.drain(0..decided_leader_num);
-        if consistent_committed_leader_num == committed.len() {
-            tracing::debug!(
-                "Happy path: speculative APS tree is consistent with consensus committed order",
-            );
-            self.aps_tree_sub_dags
-                .drain(0..consistent_committed_leader_num);
-        } else {
-            tracing::debug!(
-                "Fallback path: speculative APS tree is inconsistent with consensus committed order",
-            );
-            self.speculative_linearizer.committed = self.consensus_linearizer.committed.clone();
-            self.aps_tree_sub_dags.clear();
-            // rebuild sub dags with the new aps tree
-            let remaining_predicted_committed_leaders = self
-                .aps_tree
-                .get_predict_committed_leader_blocks_since_round(self.aps_tree.start_round);
-            self.aps_tree_sub_dags = self.speculative_linearizer.handle_commit(
-                &self.block_store,
-                remaining_predicted_committed_leaders.clone(),
-            );
-        }
 
         commit_data
     }
