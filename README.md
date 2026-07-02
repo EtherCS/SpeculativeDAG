@@ -31,7 +31,7 @@ To avoid rebuilding the binary before every run, build once with `cargo build` a
 Run a short local committee without network jitter:
 
 ```bash
-SKIP_BUILD=1 bash scripts/speculative.sh 4 60
+SKIP_BUILD=1 bash speculative.sh 4 60
 ```
 
 This runs 4 validators for 60 seconds and writes results to `./results/speculative-<mode>-<timestamp>/`.
@@ -41,7 +41,7 @@ This runs 4 validators for 60 seconds and writes results to `./results/speculati
 Run the system with injected network jitter:
 
 ```bash
-SKIP_BUILD=1 bash scripts/jitterrun.sh 90 7 1 4 2500 10 50 100
+SKIP_BUILD=1 bash jitterrun.sh 90 7 1 4 2500 10 50 100
 ```
 
 Arguments:
@@ -60,8 +60,8 @@ Arguments:
 Both `speculative.sh` and `jitterrun.sh` accept an optional experiment mode and output directory:
 
 ```bash
-SKIP_BUILD=1 bash scripts/speculative.sh 4 60 full ./results/full-dryrun
-SKIP_BUILD=1 bash scripts/jitterrun.sh 90 7 1 4 2500 10 50 100 full ./results/full-jitter
+SKIP_BUILD=1 bash speculative.sh 4 60 full ./results/full-dryrun
+SKIP_BUILD=1 bash jitterrun.sh 90 7 1 4 2500 10 50 100 full ./results/full-jitter
 ```
 
 Supported modes:
@@ -79,13 +79,13 @@ These modes are intended for ablation studies.
 Run the full ablation matrix:
 
 ```bash
-SKIP_BUILD=1 bash scripts/ablation_study.sh jitter ./results/ablation-jitter
+SKIP_BUILD=1 bash ablation_study.sh jitter ./results/ablation-jitter
 ```
 
 For a no-jitter sweep:
 
 ```bash
-SKIP_BUILD=1 bash scripts/ablation_study.sh dryrun ./results/ablation-dryrun
+SKIP_BUILD=1 bash ablation_study.sh dryrun ./results/ablation-dryrun
 ```
 
 By default the sweep covers:
@@ -135,6 +135,15 @@ The summary currently extracts the most useful paper-facing metrics, including:
 Example raw metrics:
 
 ```text
+# speculative_predictions_total is used to calculate the prediction accuracy
+speculative_predictions_total{outcome="commit_hit"} 378
+speculative_predictions_total{outcome="skip_hit"} 23
+speculative_predictions_total{outcome="skip_miss"} 5
+
+# speculative_snapshot_total{kind="pre_exec"} is the number of snapshots a node took, with
+speculative_snapshot_total{kind="pre_exec"} 2
+speculative_snapshot_total{kind="reuse"} 480
+
 block_execution_latency{v="count"} 6570
 block_execution_latency{v="p50"} 530
 block_execution_latency{v="p90"} 2848
