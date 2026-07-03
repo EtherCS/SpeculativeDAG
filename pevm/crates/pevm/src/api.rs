@@ -432,7 +432,7 @@ impl PevmExecutor {
         self.storage.update_accounts(state);
     }
 
-    pub fn execute(&mut self, txs: Vec<(String, Address)>) {
+    pub fn execute_checked(&mut self, txs: Vec<(String, Address)>) -> anyhow::Result<()> {
         let mut txs = deserializer::decode_batch_hex(txs);
 
         match self.execution_mode {
@@ -445,7 +445,7 @@ impl PevmExecutor {
                     BlockEnv::default(),
                     txs,
                 );
-                self.update_storage(result.unwrap());
+                self.update_storage(result?);
             }
             ExecutionMode::Parallel => {
                 let concurrency_level =
@@ -474,9 +474,15 @@ impl PevmExecutor {
                     Err(e) => tracing::error!("Execution failed: {:?}", e),
                 }
 
-                self.update_storage(result.unwrap());
+                self.update_storage(result?);
             }
         }
+
+        Ok(())
+    }
+
+    pub fn execute(&mut self, txs: Vec<(String, Address)>) {
+        self.execute_checked(txs).unwrap();
     }
 }
 

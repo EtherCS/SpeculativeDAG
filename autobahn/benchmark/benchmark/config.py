@@ -234,6 +234,12 @@ class BenchParameters:
             self.partition_nodes = int(json['partition_nodes'])
             self.partition_start = int(json['partition_start'])
             self.partition_duration = int(json['partition_duration'])
+
+            self.workload = json.get('workload')
+            self.artifacts = str(json.get('artifacts', '.'))
+            self.num_clusters = int(json.get('num_clusters', 5))
+            self.families_per_cluster = int(json.get('families_per_cluster', 5))
+            self.people_per_family = int(json.get('people_per_family', 8))
         except KeyError as e:
             raise ConfigError(f'Malformed bench parameters: missing key {e}')
 

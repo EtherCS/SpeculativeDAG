@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
-use crate::common::batch;
+use crate::common::{batch, serialized_batch};
 use crate::worker::WorkerMessage;
 use std::fs;
 use tokio::sync::mpsc::channel;
@@ -37,7 +37,12 @@ async fn hash_and_store() {
             .try_into()
             .unwrap(),
     );
-    let expected = bincode::serialize(&WorkerPrimaryMessage::OurBatch(digest.clone(), id)).unwrap();
+    let expected = bincode::serialize(&WorkerPrimaryMessage::OurBatch(
+        digest.clone(),
+        id,
+        serialized_batch(),
+    ))
+    .unwrap();
     assert_eq!(output, expected);
 
     // Ensure the `Processor` correctly stored the batch.

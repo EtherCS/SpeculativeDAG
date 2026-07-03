@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crypto::{generate_production_keypair, PublicKey, SecretKey, Hash};
+use crypto::{generate_production_keypair, PublicKey, SecretKey};
 use log::info;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,7 @@ pub type Stake = u32;
 pub type WorkerId = u32;
 
 #[derive(Deserialize, Clone)]
+#[serde(default)]
 pub struct Parameters {
     /// The timeout delay of the consensus protocol.
     pub timeout_delay: u64,
@@ -98,6 +99,15 @@ pub struct Parameters {
     pub simulate_asynchrony: bool,
     pub asynchrony_start: u64,
     pub asynchrony_duration: u64,
+
+    // EVM execution config
+    pub evm_execution_mode: String,
+    pub evm_workload: String,
+    pub evm_executor_mode: String,
+    pub evm_artifacts_dir: String,
+    pub evm_num_clusters: usize,
+    pub evm_num_families_per_cluster: usize,
+    pub evm_num_people_per_family: usize,
 }
 
 impl Default for Parameters {
@@ -125,6 +135,14 @@ impl Default for Parameters {
             simulate_asynchrony: false,
             asynchrony_start: 20_000, //20 second in
             asynchrony_duration: 10_000, //10 seconds
+
+            evm_execution_mode: "none".to_string(),
+            evm_workload: "erc20".to_string(),
+            evm_executor_mode: "parallel".to_string(),
+            evm_artifacts_dir: ".".to_string(),
+            evm_num_clusters: 5,
+            evm_num_families_per_cluster: 5,
+            evm_num_people_per_family: 8,
         }
     }
 }
@@ -147,6 +165,10 @@ impl Parameters {
         info!("Optimistic tips enabled? {}", self.use_optimistic_tips);
         info!("Parallel Proposals enabled? {}. K: {}", self.use_parallel_proposals, self.k);
         info!("Ride share enabled? {}. Car timeout: {}", self.use_ride_share, self.car_timeout);
+        info!(
+            "EVM execution mode: {}. Workload: {}. PEVM executor: {}",
+            self.evm_execution_mode, self.evm_workload, self.evm_executor_mode
+        );
     }
 }
 

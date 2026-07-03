@@ -4,6 +4,7 @@
 use crate::aggregators::{QCMaker, TCMaker, VotesAggregator};
 //use crate::common::special_header;
 use crate::error::{DagError, DagResult};
+use crate::execution::ExecutionRequest;
 use crate::leader::LeaderElector;
 use crate::messages::{
     Certificate, ConsensusMessage, Header, Proposal, Timeout, Vote, TC, ConsensusType, QC, verify_confirm, verify_commit, CommitQC, transform_commitQC, ConsensusRequest, ConsensusVote,
@@ -70,6 +71,7 @@ pub struct Core {
     tx_proposer: Sender<Certificate>,
     // Receive sync requests for headers required at the consensus layer
     rx_request_header_sync: Receiver<Digest>,
+    tx_execution: Sender<ExecutionRequest>,
 
     /// The last garbage collected round.
     gc_round: Height,
@@ -159,6 +161,7 @@ impl Core {
         tx_proposer: Sender<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
         tx_info: Sender<ConsensusMessage>,
+        tx_execution: Sender<ExecutionRequest>,
         leader_elector: LeaderElector,
         timeout_delay: u64,
         use_optimistic_tips: bool,
@@ -191,6 +194,7 @@ impl Core {
                 tx_proposer,
                 rx_request_header_sync,
                 tx_info,
+                tx_execution,
                 leader_elector,
                 gc_round: 0,
                 current_qcs_formed: 0,
@@ -377,6 +381,10 @@ impl Core {
         // Store the header since we have the parents (recursively).
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.digest().to_vec(), bytes).await;
+        let _ = self
+            .tx_execution
+            .send(ExecutionRequest::Proposed(header.clone()))
+            .await;
 
         // If the header received is at a greater height then add it to our local tips and proposals
         if self.use_optimistic_tips && header.height() > self.current_proposal_tips.get(&header.origin()).unwrap().height {

@@ -20,6 +20,7 @@ store = { path = "../store" }
 config = { path = "../config" }
 network = { path = "../network" }
 primary = { path = "../primary" }
+pevm = { path = "../../pevm/crates/pevm" }
 
 [dev-dependencies]
 rand = "0.7.3"

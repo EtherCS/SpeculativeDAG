@@ -46,14 +46,41 @@ class CommandMaker:
                 f'--store {store} --parameters {parameters} worker --id {id}')
 
     @staticmethod
-    def run_client(address, size, rate, nodes):
+    def run_client(
+        address,
+        size,
+        rate,
+        nodes,
+        workload=None,
+        artifacts='.',
+        num_clusters=5,
+        families_per_cluster=5,
+        people_per_family=8,
+        replica_id=None,
+        replica_num=None,
+    ):
         assert isinstance(address, str)
         assert isinstance(size, int) and size > 0
         assert isinstance(rate, int) and rate >= 0
         assert isinstance(nodes, list)
         assert all(isinstance(x, str) for x in nodes)
         nodes = f'--nodes {" ".join(nodes)}' if nodes else ''
-        return f'./benchmark_client {address} --size {size} --rate {rate} {nodes}'
+        evm = ''
+        if workload:
+            evm = (
+                f' --workload {workload}'
+                f' --artifacts {artifacts}'
+                f' --num-clusters {num_clusters}'
+                f' --families-per-cluster {families_per_cluster}'
+                f' --people-per-family {people_per_family}'
+            )
+            if replica_id is not None:
+                evm += f' --replica-id {replica_id}'
+            if replica_num is not None:
+                evm += f' --replica-num {replica_num}'
+        return (
+            f'./benchmark_client {address} --size {size} --rate {rate} {nodes}{evm}'
+        )
 
     @staticmethod
     def kill():

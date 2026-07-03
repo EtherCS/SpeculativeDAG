@@ -2,7 +2,7 @@
 from datetime import datetime
 from glob import glob
 from multiprocessing import Pool
-from os.path import join
+from os.path import basename, isdir, join
 from re import findall, search
 from statistics import mean
 
@@ -106,6 +106,10 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
+        execution_match = search(
+            r'EVM execution mode: ([^.]+)\. Workload: ([^.]+)\. PEVM executor: ([^\n]+)',
+            log,
+        )
         configs = {
             #'timeout_delay': int(
             #    search(r'Timeout delay .* (\d+)', log).group(1)
@@ -131,6 +135,9 @@ class LogParser:
             'max_batch_delay': int(
                 search(r'Max batch delay .* (\d+)', log).group(1)
             ),
+            'execution': execution_match.group(1).strip() if execution_match else 'none',
+            'workload': execution_match.group(2).strip() if execution_match else 'none',
+            'executor': execution_match.group(3).strip() if execution_match else 'unknown',
         }
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
@@ -212,6 +219,9 @@ class LogParser:
         sync_retry_nodes = self.configs[0]['sync_retry_nodes']
         batch_size = self.configs[0]['batch_size']
         max_batch_delay = self.configs[0]['max_batch_delay']
+        execution = self.configs[0]['execution']
+        workload = self.configs[0]['workload']
+        executor = self.configs[0]['executor']
 
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
@@ -228,6 +238,9 @@ class LogParser:
             f' Committee size: {self.committee_size} node(s)\n'
             f' Worker(s) per node: {self.workers} worker(s)\n'
             f' Collocate primary and workers: {self.collocate}\n'
+            f' Execution: {execution}\n'
+            f' Workload: {workload}\n'
+            f' Executor: {executor}\n'
             f' Input rate: {sum(self.rate):,} tx/s\n'
             f' Transaction size: {self.size[0]:,} B\n'
             f' Execution time: {round(duration):,} s\n'
@@ -275,3 +288,16 @@ class LogParser:
                 workers += [f.read()]
 
         return cls(clients, primaries, workers, faults=faults)
+
+    @classmethod
+    def latest_run_directory(cls, root):
+        assert isinstance(root, str)
+
+        run_directories = [
+            path for path in glob(join(root, '*'))
+            if isdir(path)
+        ]
+        if not run_directories:
+            return root
+
+        return max(run_directories, key=basename)

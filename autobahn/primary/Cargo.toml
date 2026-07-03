@@ -19,11 +19,14 @@ env_logger = "0.7.1"
 log = "0.4.11"
 async-recursion = "0.3.2"
 async-trait = "0.1.50"
+anyhow = "1.0.40"
+ethers = "2.0.14"
 
 crypto = { path = "../crypto" }
 store = { path = "../store" }
 config = { path = "../config" }
 network = { path = "../network" }
+pevm = { path = "../../pevm/crates/pevm" }
 #sailfish = { path = "../sailfish"}
 
 [dev-dependencies]

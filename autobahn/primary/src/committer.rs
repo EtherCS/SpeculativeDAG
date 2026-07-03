@@ -4,6 +4,7 @@
 use crate::messages::ConsensusMessage;
 use crate::primary::{Slot, CHANNEL_CAPACITY};
 use crate::synchronizer::Synchronizer;
+use crate::execution::ExecutionRequest;
 use crate::{Certificate, Header, Height};
 //use crate::error::{ConsensusError, ConsensusResult};
 use config::Committee;
@@ -76,6 +77,7 @@ pub struct Committer {
     rx_deliver: Receiver<Certificate>,
     rx_commit_message: Receiver<ConsensusMessage>,
     tx_output: Sender<Header>,
+    tx_execution: Sender<ExecutionRequest>,
     synchronizer: Synchronizer,
     genesis: Vec<Certificate>,
 }
@@ -90,6 +92,7 @@ impl Committer {
         rx_commit_message: Receiver<ConsensusMessage>,
         tx_output: Sender<Header>,
         synchronizer: Synchronizer,
+        tx_execution: Sender<ExecutionRequest>,
     ) {
         let (tx_deliver, rx_deliver) = channel(CHANNEL_CAPACITY);
 
@@ -106,6 +109,7 @@ impl Committer {
                 rx_deliver,
                 rx_commit_message,
                 tx_output,
+                tx_execution,
                 synchronizer,
                 genesis,
             }
@@ -160,6 +164,10 @@ impl Committer {
                                     if let Err(e) = self.tx_output.send(header.clone()).await {
                                         debug!("Failed to send block through the output channel: {}", e);
                                     }
+                                    let _ = self
+                                        .tx_execution
+                                        .send(ExecutionRequest::Committed(header.clone()))
+                                        .await;
                                     debug!("Finish upcall");
                                 }
                             }

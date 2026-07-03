@@ -261,14 +261,23 @@ class Bench:
         Print.info('Booting clients...')
         workers_addresses = committee.workers_addresses(faults)
         rate_share = ceil(rate / committee.workers())
+        replica_num = committee.workers()
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
                 host = Committee.ip(address)
+                replica_id = i * bench_parameters.workers + int(id)
                 cmd = CommandMaker.run_client(
                     address,
                     bench_parameters.tx_size,
                     rate_share,
-                    [x for y in workers_addresses for _, x in y]
+                    [x for y in workers_addresses for _, x in y],
+                    workload=bench_parameters.workload,
+                    artifacts=bench_parameters.artifacts,
+                    num_clusters=bench_parameters.num_clusters,
+                    families_per_cluster=bench_parameters.families_per_cluster,
+                    people_per_family=bench_parameters.people_per_family,
+                    replica_id=replica_id,
+                    replica_num=replica_num,
                 )
                 print(cmd)
                 log_file = PathMaker.client_log_file(i, id)

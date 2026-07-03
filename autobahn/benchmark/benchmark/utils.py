@@ -11,6 +11,8 @@ class BenchError(Exception):
 
 
 class PathMaker:
+    _logs_path = 'logs'
+
     @staticmethod
     def binary_path():
         return join('..', 'target', 'release')
@@ -39,9 +41,14 @@ class PathMaker:
         worker_id = f'-{j}' if j is not None else ''
         return f'.db-{i}{worker_id}'
 
+    @classmethod
+    def set_logs_path(cls, path):
+        assert isinstance(path, str) and path
+        cls._logs_path = path
+
     @staticmethod
     def logs_path():
-        return 'logs'
+        return PathMaker._logs_path
 
     @staticmethod
     def primary_log_file(i):

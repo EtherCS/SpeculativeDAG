@@ -9,6 +9,7 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
+use crate::execution::{ExecutionRequest, ExecutionService};
 use crate::leader::LeaderElector;
 use crate::messages::{Certificate, Header, Vote, Timeout, TC, Proposal, ConsensusMessage, ConsensusVote, ConsensusRequest};
 use crate::payload_receiver::PayloadReceiver;
@@ -67,9 +68,9 @@ pub enum PrimaryWorkerMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerPrimaryMessage {
     /// The worker indicates it sealed a new batch.
-    OurBatch(Digest, WorkerId),
+    OurBatch(Digest, WorkerId, Vec<u8>),
     /// The worker indicates it received a batch's digest from another authority.
-    OthersBatch(Digest, WorkerId),
+    OthersBatch(Digest, WorkerId, Vec<u8>),
 }
 
 pub struct Primary;
@@ -105,6 +106,9 @@ impl Primary {
         let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (_tx_mempool, rx_mempool) = channel(CHANNEL_CAPACITY);
+        let (tx_execution, rx_execution) = channel(CHANNEL_CAPACITY);
+
+        ExecutionService::spawn(&parameters, store.clone(), rx_execution);
 
 
         // Write the parameters to the logs.
@@ -194,6 +198,7 @@ impl Primary {
             /* tx_proposer */ tx_parents,
             rx_request_header_sync,
             /*tx info */ tx_instance,
+            tx_execution.clone(),
             LeaderElector::new(committee.clone()),
             parameters.timeout_delay,
             parameters.use_optimistic_tips,
@@ -208,7 +213,17 @@ impl Primary {
             parameters.asynchrony_duration,
         );
 
-        Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);
+        Committer::spawn(
+            committee.clone(),
+            store.clone(),
+            parameters.gc_depth,
+            rx_mempool,
+            rx_committer,
+            rx_commit,
+            tx_output,
+            synchronizer,
+            tx_execution,
+        );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
         GarbageCollector::spawn(
@@ -320,7 +335,7 @@ impl MessageHandler for PrimaryReceiverHandler {
 #[derive(Clone)]
 struct WorkerReceiverHandler {
     tx_our_digests: Sender<(Digest, WorkerId)>,
-    tx_others_digests: Sender<(Digest, WorkerId)>,
+    tx_others_digests: Sender<(Digest, WorkerId, Vec<u8>)>,
 }
 
 #[async_trait]
@@ -332,16 +347,21 @@ impl MessageHandler for WorkerReceiverHandler {
     ) -> Result<(), Box<dyn Error>> {
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized).map_err(DagError::SerializationError)? {
-            WorkerPrimaryMessage::OurBatch(digest, worker_id) => self
-                .tx_our_digests                                         //sender channel to Proposer
-                .send((digest, worker_id))
+            WorkerPrimaryMessage::OurBatch(digest, worker_id, batch) => {
+                self.tx_our_digests
+                    .send((digest.clone(), worker_id))
+                    .await
+                    .expect("Failed to send workers' digests");
+                self.tx_others_digests
+                    .send((digest, worker_id, batch))
+                    .await
+                    .expect("Failed to send workers' batches");
+            }
+            WorkerPrimaryMessage::OthersBatch(digest, worker_id, batch) => self
+                .tx_others_digests
+                .send((digest, worker_id, batch))
                 .await
-                .expect("Failed to send workers' digests"),
-            WorkerPrimaryMessage::OthersBatch(digest, worker_id) => self
-                .tx_others_digests                                      //sender channel to PayloadReceiver
-                .send((digest, worker_id))
-                .await
-                .expect("Failed to send workers' digests"),
+                .expect("Failed to send workers' batches"),
         }
         Ok(())
     }

@@ -5,6 +5,7 @@ mod aggregators;
 mod certificate_waiter;
 mod core;
 pub mod committer;
+mod execution;
 mod garbage_collector;
 mod header_waiter;
 mod helper;

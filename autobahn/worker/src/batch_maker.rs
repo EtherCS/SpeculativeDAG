@@ -14,6 +14,8 @@ use log::debug;
 use log::info;
 use network::{ReliableSender, SimpleSender};
 #[cfg(feature = "benchmark")]
+use pevm::api::TransactionWithHint;
+#[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -37,8 +39,7 @@ pub struct BatchMaker {
     /// Channel to receive transactions from the network.
     rx_transaction: Receiver<Transaction>,
    
-    //tx_message: Sender<QuorumWaiterMessage>,  /// Output channel to deliver sealed batches to the `QuorumWaiter`.
-    tx_batch: Sender<Vec<u8>>,   // channel to forward batch digest to processor in order for primary to propose.
+    tx_message: Sender<QuorumWaiterMessage>,  /// Output channel to deliver sealed batches to the `QuorumWaiter`.
 
     /// The network addresses of the other workers that share our worker id.
     workers_addresses: Vec<(PublicKey, SocketAddr)>,
@@ -47,7 +48,7 @@ pub struct BatchMaker {
     /// Holds the size of the current batch (in bytes).
     current_batch_size: usize,
     /// A network sender to broadcast the batches to the other workers.
-    network: SimpleSender,
+    network: ReliableSender,
 }
 
 impl BatchMaker {
@@ -55,8 +56,7 @@ impl BatchMaker {
         batch_size: usize,
         max_batch_delay: u64,
         rx_transaction: Receiver<Transaction>, //receiver channel from worker.TxReceiverHandler 
-        //tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
-        tx_batch: Sender<Vec<u8>>,   // sender channel to worker.Processor
+        tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
     ) {
         tokio::spawn(async move {
@@ -64,12 +64,11 @@ impl BatchMaker {
                 batch_size,
                 max_batch_delay,
                 rx_transaction,
-                //tx_message, //previously forwarded batch to Quorum_waiter; now skipping this step.
-                tx_batch,  
+                tx_message,
                 workers_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
-                network: SimpleSender::new(),
+                network: ReliableSender::new(),
             }
             .run()
             .await;
@@ -122,12 +121,11 @@ impl BatchMaker {
 
         // Look for sample txs (they all start with 0) and gather their txs id (the next 8 bytes).
         #[cfg(feature = "benchmark")]
-        let tx_ids: Vec<_> = self
+        let tx_ids = self
             .current_batch
             .iter()
-            .filter(|tx| tx[0] == 0u8 && tx.len() > 8)
-            .filter_map(|tx| tx[1..9].try_into().ok())
-            .collect();
+            .filter_map(Self::sample_transaction_id)
+            .collect::<Vec<_>>();
 
         // Serialize the batch.
         self.current_batch_size = 0;
@@ -157,29 +155,33 @@ impl BatchMaker {
             info!("Batch {:?} contains {} B", digest, size);
         }
 
-        // Broadcast the batch through the network.
-
-        //NEW:
-        //Best-effort broadcast only. Any failure is correlated with the primary operating this node (running on same machine)
-        let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
+        // Broadcast the batch reliably and wait for a quorum of acknowledgements before
+        // forwarding it for local proposal. This keeps payload availability aligned with headers.
+        let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
         let bytes = Bytes::from(serialized.clone());
-        self.network.broadcast(addresses, bytes).await; 
+        let handlers = self.network.broadcast(addresses, bytes).await;
 
-        self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
+        self.tx_message
+            .send(QuorumWaiterMessage {
+                batch: serialized,
+                handlers: names.into_iter().zip(handlers.into_iter()).collect(),
+            })
+            .await
+            .expect("Failed to deliver batch");
+    }
 
-        //OLD:
-        //This uses reliable sender. The receiver worker will reply with an ack. The Reply Handler is passed to Quorum Waiter.
-        // let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
-        // let bytes = Bytes::from(serialized.clone());
-        // let handlers = self.network.broadcast(addresses, bytes).await; 
+    #[cfg(feature = "benchmark")]
+    fn sample_transaction_id(tx: &Vec<u8>) -> Option<[u8; 8]> {
+        if let Ok(txn) = bincode::deserialize::<TransactionWithHint>(tx) {
+            if txn.hint == "autobahn" {
+                return Some(txn.timestamp);
+            }
+        }
 
-        // // Send the batch through the deliver channel for further processing.
-        // self.tx_message
-        //     .send(QuorumWaiterMessage {
-        //         batch: serialized,
-        //         handlers: names.into_iter().zip(handlers.into_iter()).collect(),
-        //     })
-        //     .await
-        //     .expect("Failed to deliver batch");
+        if tx.first() == Some(&0u8) && tx.len() > 8 {
+            return tx[1..9].try_into().ok();
+        }
+
+        None
     }
 }

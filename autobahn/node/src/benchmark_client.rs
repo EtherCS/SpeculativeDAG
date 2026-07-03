@@ -7,9 +7,16 @@ use env_logger::Env;
 use futures::future::join_all;
 use futures::sink::SinkExt as _;
 use log::{info, warn};
+use pevm::api::{
+    ensure_workload_artifacts, PevmTransactionGenerator, TransactionWithHint, WorkloadType,
+};
 use rand::Rng;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
@@ -22,6 +29,13 @@ async fn main() -> Result<()> {
         .args_from_usage("--size=<INT> 'The size of each transaction in bytes'")
         .args_from_usage("--rate=<INT> 'The rate (txs/s) at which to send the transactions'")
         .args_from_usage("--nodes=[ADDR]... 'Network addresses that must be reachable before starting the benchmark.'")
+        .args_from_usage("--workload=[NAME] 'PEVM workload: erc20|weth|uniswap'")
+        .args_from_usage("--artifacts=[PATH] 'Directory for PEVM workload artifacts'")
+        .args_from_usage("--num-clusters=[INT] 'Number of workload clusters'")
+        .args_from_usage("--families-per-cluster=[INT] 'Number of families per cluster'")
+        .args_from_usage("--people-per-family=[INT] 'Number of people per family'")
+        .args_from_usage("--replica-id=[INT] 'Replica id used by the PEVM transaction generator'")
+        .args_from_usage("--replica-num=[INT] 'Replica count used by the PEVM transaction generator'")
         .setting(AppSettings::ArgRequiredElseHelp)
         .get_matches();
 
@@ -65,6 +79,7 @@ async fn main() -> Result<()> {
         size,
         rate,
         nodes,
+        evm: EvmClientConfig::from_matches(&matches)?,
     };
 
     // Wait for all nodes to be online and synchronized.
@@ -75,10 +90,11 @@ async fn main() -> Result<()> {
 }
 
 struct Client {
-    target: SocketAddr,  //specifies the worker to connect to
-    size: usize,         //specifies the bit size of transactions
+    target: SocketAddr, //specifies the worker to connect to
+    size: usize,        //specifies the bit size of transactions
     rate: u64,
-    nodes: Vec<SocketAddr>,  //specifies the addresses of all nodes. Currently only used to wait for them to be alive, but also necessary if we wanted to receive result replies (from any node).
+    nodes: Vec<SocketAddr>, //specifies the addresses of all nodes. Currently only used to wait for them to be alive, but also necessary if we wanted to receive result replies (from any node).
+    evm: Option<EvmClientConfig>,
 }
 
 impl Client {
@@ -87,7 +103,7 @@ impl Client {
         const BURST_DURATION: u64 = 1000 / PRECISION;
 
         // The transaction size must be at least 16 bytes to ensure all txs are different.
-        if self.size < 9 {
+        if self.evm.is_none() && self.size < 9 {
             return Err(anyhow::Error::msg(
                 "Transaction size must be at least 9 bytes",
             ));
@@ -106,6 +122,12 @@ impl Client {
         let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
         let interval = interval(Duration::from_millis(BURST_DURATION));
         tokio::pin!(interval);
+        let mut evm_generator = self
+            .evm
+            .as_ref()
+            .map(EvmClientConfig::build_generator)
+            .transpose()?;
+        let mut evm_queue = VecDeque::<TransactionWithHint>::new();
 
         // NOTE: This log entry is used to compute performance.
         info!("Start sending transactions");
@@ -115,22 +137,44 @@ impl Client {
             let now = Instant::now();
 
             for x in 0..burst {
-                if x == counter % burst {
-                    // NOTE: This log entry is used to compute performance.
-                    info!("Sending sample transaction {}", counter);
-
-                    tx.put_u8(0u8); // Sample txs start with 0.
-                    tx.put_u64(counter); // This counter identifies the tx.
+                let bytes = if let Some(generator) = evm_generator.as_mut() {
+                    if evm_queue.is_empty() {
+                        for (raw_hex, caller) in generator.generate_transactions() {
+                            let timestamp = current_timestamp_bytes();
+                            let sample_id = u64::from_be_bytes(timestamp);
+                            info!("Sending sample transaction {}", sample_id);
+                            evm_queue.push_back(TransactionWithHint {
+                                timestamp,
+                                raw_hex,
+                                caller,
+                                hint: "autobahn".to_string(),
+                            });
+                        }
+                    }
+                    let txn = evm_queue
+                        .pop_front()
+                        .context("PEVM generator produced no transactions")?;
+                    bytes::Bytes::from(
+                        bincode::serialize(&txn).context("Failed to serialize PEVM transaction")?,
+                    )
                 } else {
-                    r += 1;
-                    tx.put_u8(1u8); // Standard txs start with 1.
-                    tx.put_u64(r); // Ensures all clients send different txs.
-                };
+                    if x == counter % burst {
+                        // NOTE: This log entry is used to compute performance.
+                        info!("Sending sample transaction {}", counter);
 
-                tx.resize(self.size, 0u8); //Truncate any bits past size
-                let bytes = tx.split().freeze(); //split() moves byte content from tx to bytes (i.e. avoids copy). freeze() makes it const so it can be shared. (bytes can now be used/sent async)
-                //Note: Does not sign transactions. Transaction id-s are not unique w.r.t to content.
-                if let Err(e) = transport.send(bytes).await { //Uses TCP connection to send request to assigned worker. Note: Optimistically only sending to one worker.
+                        tx.put_u8(0u8); // Sample txs start with 0.
+                        tx.put_u64(counter); // This counter identifies the tx.
+                    } else {
+                        r += 1;
+                        tx.put_u8(1u8); // Standard txs start with 1.
+                        tx.put_u64(r); // Ensures all clients send different txs.
+                    };
+
+                    tx.resize(self.size, 0u8);
+                    tx.split().freeze()
+                };
+                if let Err(e) = transport.send(bytes).await {
+                    // Uses TCP connection to send requests to one worker.
                     warn!("Failed to send transaction: {}", e);
                     break 'main;
                 }
@@ -155,5 +199,101 @@ impl Client {
             })
         }))
         .await;
+    }
+}
+
+fn current_timestamp_bytes() -> [u8; 8] {
+    let micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+    micros.to_be_bytes()
+}
+
+struct EvmClientConfig {
+    workload: WorkloadType,
+    artifacts_dir: PathBuf,
+    replica_id: u64,
+    replica_num: u64,
+}
+
+impl EvmClientConfig {
+    fn from_matches(matches: &clap::ArgMatches<'_>) -> Result<Option<Self>> {
+        let workload_name = match matches.value_of("workload") {
+            Some(name) => name.to_ascii_lowercase(),
+            None => return Ok(None),
+        };
+
+        let num_clusters = matches
+            .value_of("num-clusters")
+            .unwrap_or("5")
+            .parse()
+            .context("The number of clusters must be a positive integer")?;
+        let families_per_cluster = matches
+            .value_of("families-per-cluster")
+            .unwrap_or("5")
+            .parse()
+            .context("The number of families per cluster must be a positive integer")?;
+        let people_per_family = matches
+            .value_of("people-per-family")
+            .unwrap_or("8")
+            .parse()
+            .context("The number of people per family must be a positive integer")?;
+        let workload = match workload_name.as_str() {
+            "erc20" => WorkloadType::ERC20(num_clusters, families_per_cluster, people_per_family),
+            "weth" => WorkloadType::WETH(num_clusters, families_per_cluster, people_per_family),
+            "uniswap" => {
+                WorkloadType::Uniswap(num_clusters, families_per_cluster, people_per_family)
+            }
+            other => return Err(anyhow::anyhow!("unsupported workload '{other}'")),
+        };
+        let artifacts_dir = matches
+            .value_of("artifacts")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .to_path_buf()
+            });
+        let replica_id = matches
+            .value_of("replica-id")
+            .unwrap_or("0")
+            .parse()
+            .context("The replica id must be a non-negative integer")?;
+        let replica_num = matches
+            .value_of("replica-num")
+            .unwrap_or("1")
+            .parse()
+            .context("The replica num must be a positive integer")?;
+
+        Ok(Some(Self {
+            workload,
+            artifacts_dir,
+            replica_id,
+            replica_num,
+        }))
+    }
+
+    fn build_generator(&self) -> Result<PevmTransactionGenerator> {
+        let (storage_name, addresses_name) = self.workload.artifact_file_names();
+        let storage_path = self.artifacts_dir.join(storage_name);
+        let addresses_path = self.artifacts_dir.join(addresses_name);
+        ensure_workload_artifacts(
+            &self.workload,
+            &storage_path.to_string_lossy(),
+            &addresses_path.to_string_lossy(),
+        )?;
+
+        let (tx_sender, _tx_receiver) = mpsc::channel(1);
+        let (_signal_sender, signal_receiver) = mpsc::channel(1);
+        Ok(PevmTransactionGenerator::new(
+            self.workload.clone(),
+            self.replica_id,
+            self.replica_num,
+            tx_sender,
+            signal_receiver,
+            addresses_path.to_string_lossy().into_owned(),
+        ))
     }
 }

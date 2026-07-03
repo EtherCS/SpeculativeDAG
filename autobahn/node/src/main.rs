@@ -21,7 +21,7 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 #[tokio::main]
 async fn main() -> Result<()> {
     //std::env::set_var("RUST_BACKTRACE", "1");
-    
+
     let matches = App::new(crate_name!())
         .version(crate_version!())
         .about("A research implementation of Sailfish.")
@@ -38,6 +38,15 @@ async fn main() -> Result<()> {
                 .args_from_usage("--committee=<FILE> 'The file containing committee information'")
                 .args_from_usage("--parameters=[FILE] 'The file containing the node parameters'")
                 .args_from_usage("--store=<PATH> 'The path where to create the data store'")
+                .args_from_usage(
+                    "--execution=[MODE] 'EVM execution mode: none|ordered|speculative'",
+                )
+                .args_from_usage("--workload=[NAME] 'EVM workload: erc20|weth|uniswap'")
+                .args_from_usage("--executor=[MODE] 'PEVM executor mode: sequential|parallel'")
+                .args_from_usage("--artifacts=[PATH] 'Directory for PEVM workload artifacts'")
+                .args_from_usage("--num-clusters=[INT] 'Number of workload clusters'")
+                .args_from_usage("--families-per-cluster=[INT] 'Number of families per cluster'")
+                .args_from_usage("--people-per-family=[INT] 'Number of people per family'")
                 .subcommand(SubCommand::with_name("primary").about("Run a single primary"))
                 .subcommand(
                     SubCommand::with_name("worker")
@@ -91,6 +100,35 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
         }
         None => Parameters::default(),
     };
+    let mut parameters = parameters;
+
+    if let Some(value) = matches.value_of("execution") {
+        parameters.evm_execution_mode = value.to_string();
+    }
+    if let Some(value) = matches.value_of("workload") {
+        parameters.evm_workload = value.to_string();
+    }
+    if let Some(value) = matches.value_of("executor") {
+        parameters.evm_executor_mode = value.to_string();
+    }
+    if let Some(value) = matches.value_of("artifacts") {
+        parameters.evm_artifacts_dir = value.to_string();
+    }
+    if let Some(value) = matches.value_of("num-clusters") {
+        parameters.evm_num_clusters = value
+            .parse()
+            .context("The number of clusters must be a positive integer")?;
+    }
+    if let Some(value) = matches.value_of("families-per-cluster") {
+        parameters.evm_num_families_per_cluster = value
+            .parse()
+            .context("The number of families per cluster must be a positive integer")?;
+    }
+    if let Some(value) = matches.value_of("people-per-family") {
+        parameters.evm_num_people_per_family = value
+            .parse()
+            .context("The number of people per family must be a positive integer")?;
+    }
 
     // The `SignatureService` provides signatures on input digests.
     let signature_service = SignatureService::new(keypair.secret);
@@ -119,7 +157,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
             let (tx_feedback, rx_feedback) = channel(CHANNEL_CAPACITY);
             let (tx_committer, rx_committer) = channel(CHANNEL_CAPACITY);
             let (tx_pushdown_cert, rx_pushdown_cert) = channel(CHANNEL_CAPACITY);
-            let(tx_request_header_sync, rx_request_header_sync) = channel(CHANNEL_CAPACITY);
+            let (tx_request_header_sync, rx_request_header_sync) = channel(CHANNEL_CAPACITY);
 
             Primary::spawn(
                 name,

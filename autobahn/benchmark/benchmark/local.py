@@ -1,7 +1,9 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 import subprocess
+import shlex
+from datetime import datetime
 from math import ceil
-from os.path import basename, splitext
+from os.path import abspath, basename, splitext
 from time import sleep
 
 from benchmark.commands import CommandMaker
@@ -25,8 +27,8 @@ class LocalBench:
 
     def _background_run(self, command, log_file):
         name = splitext(basename(log_file))[0]
-        cmd = f'{command} 2> {log_file}'
-        subprocess.run(['tmux', 'new', '-d', '-s', name, cmd], check=True)
+        cmd = f'stdbuf -oL -eL {command} > {shlex.quote(abspath(log_file))} 2>&1'
+        subprocess.run(['tmux', 'new', '-d', '-s', name, 'zsh', '-lc', cmd], check=True)
 
     def _kill_nodes(self):
         try:
@@ -34,6 +36,15 @@ class LocalBench:
             subprocess.run(cmd, stderr=subprocess.DEVNULL)
         except subprocess.SubprocessError as e:
             raise BenchError('Failed to kill testbed', e)
+
+    def _configure_logs_path(self):
+        execution = self.node_parameters.json.get('evm_execution_mode', 'none')
+        workload = self.node_parameters.json.get('evm_workload', 'none')
+        executor = self.node_parameters.json.get('evm_executor_mode', 'unknown')
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        run_name = f'{execution}-{workload}-{executor}-{timestamp}'
+        PathMaker.set_logs_path(f'logs/{run_name}')
+        return run_name
 
     def run(self, debug=False):
         assert isinstance(debug, bool)
@@ -45,19 +56,22 @@ class LocalBench:
         try:
             Print.info('Setting up testbed...')
             nodes, rate = self.nodes[0], self.rate[0]
+            run_name = self._configure_logs_path()
+            Print.info(f'Logs directory: {PathMaker.logs_path()}')
 
             # Cleanup all files.
             cmd = f'{CommandMaker.clean_logs()} ; {CommandMaker.cleanup()}'
-            print('before run')
             subprocess.run([cmd], shell=True, stderr=subprocess.DEVNULL)
-            print('after run')
             sleep(0.5)  # Removing the store may take time.
 
-            print('past cleanup')
             # Recompile the latest code.
             cmd = CommandMaker.compile().split()
-            subprocess.run(cmd, check=True, cwd=PathMaker.node_crate_path())
-            print('past compiled')
+            subprocess.run(
+                cmd,
+                check=True,
+                cwd=PathMaker.node_crate_path(),
+                stderr=subprocess.DEVNULL,
+            )
 
             # Create alias for the client and nodes binary.
             cmd = CommandMaker.alias_binaries(PathMaker.binary_path())
@@ -70,7 +84,6 @@ class LocalBench:
                 cmd = CommandMaker.generate_key(filename).split()
                 subprocess.run(cmd, check=True)
                 keys += [Key.from_file(filename)]
-            print('past keys')
 
             names = [x.name for x in keys]
             #print('num workers', self.workers)
@@ -82,17 +95,25 @@ class LocalBench:
             # Run the clients (they will wait for the nodes to be ready).
             workers_addresses = committee.workers_addresses(self.faults)
             rate_share = ceil(rate / committee.workers())
+            replica_num = committee.workers()
             for i, addresses in enumerate(workers_addresses):
                 for (id, address) in addresses:
+                    replica_id = i * self.workers + id
                     cmd = CommandMaker.run_client(
                         address,
                         self.tx_size,
                         rate_share,
-                        [x for y in workers_addresses for _, x in y]
+                        [x for y in workers_addresses for _, x in y],
+                        workload=self.workload,
+                        artifacts=self.artifacts,
+                        num_clusters=self.num_clusters,
+                        families_per_cluster=self.families_per_cluster,
+                        people_per_family=self.people_per_family,
+                        replica_id=replica_id,
+                        replica_num=replica_num,
                     )
                     log_file = PathMaker.client_log_file(i, id)
                     self._background_run(cmd, log_file)
-            print('past workers')
 
             # Run the primaries (except the faulty ones).
             for i, address in enumerate(committee.primary_addresses(self.faults)):
@@ -104,7 +125,6 @@ class LocalBench:
                     debug=debug
                 )
                 log_file = PathMaker.primary_log_file(i)
-                print(cmd)
                 self._background_run(cmd, log_file)
 
             # Run the workers (except the faulty ones).
@@ -128,7 +148,9 @@ class LocalBench:
 
             # Parse logs and return the parser.
             Print.info('Parsing logs...')
-            return LogParser.process(PathMaker.logs_path(), faults=self.faults)
+            parser = LogParser.process(PathMaker.logs_path(), faults=self.faults)
+            Print.info(f'Completed run: {run_name}')
+            return parser
 
         except (subprocess.SubprocessError, ParseError) as e:
             self._kill_nodes()
