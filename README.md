@@ -31,17 +31,17 @@ To avoid rebuilding the binary before every run, build once with `cargo build` a
 Run a short local committee without network jitter:
 
 ```bash
-SKIP_BUILD=1 bash speculative.sh 4 60
+SKIP_BUILD=1 bash speculative.sh 4 60 full erc20
 ```
 
-This runs 4 validators for 60 seconds and writes results to `./results/speculative-<mode>-<timestamp>/`.
+This runs 4 validators for 60 seconds on the `erc20` workload and writes results to `./results/speculative-<mode>-<workload>-<timestamp>/`.
 
 ### Jitter Run
 
 Run the system with injected network jitter:
 
 ```bash
-SKIP_BUILD=1 bash jitterrun.sh 90 7 1 4 2500 10 50 100
+SKIP_BUILD=1 bash jitterrun.sh 90 7 1 4 2500 10 50 100 full erc20
 ```
 
 Arguments:
@@ -54,14 +54,16 @@ Arguments:
 6. jitter start time in seconds
 7. jitter duration in seconds
 8. client load
+9. experiment mode
+10. workload (`erc20`, `weth`, or `uniswap`)
 
 ## Experiment Modes
 
-Both `speculative.sh` and `jitterrun.sh` accept an optional experiment mode and output directory:
+Both `speculative.sh` and `jitterrun.sh` accept an optional experiment mode, workload, and output directory:
 
 ```bash
-SKIP_BUILD=1 bash speculative.sh 4 60 full ./results/full-dryrun
-SKIP_BUILD=1 bash jitterrun.sh 90 7 1 4 2500 10 50 100 full ./results/full-jitter
+SKIP_BUILD=1 bash speculative.sh 4 60 full uniswap ./results/full-dryrun
+SKIP_BUILD=1 bash jitterrun.sh 90 7 1 4 2500 10 50 100 full weth ./results/full-jitter
 ```
 
 Supported modes:
@@ -74,18 +76,24 @@ Supported modes:
 
 These modes are intended for ablation studies.
 
+Supported workloads:
+
+- `erc20`: baseline ERC-20 transfer workload (simple token transfer)
+- `weth`: WETH9 deposit / approve / transferFrom / withdraw mix (a mixed workload of deposit, approve, transferFrom, and withdraw)
+- `uniswap`: Uniswap V3 single-swap workload (swap transactions through a Uniswap-V3-style single-swap contract)
+
 ## Ablation Sweep
 
 Run the full ablation matrix:
 
 ```bash
-SKIP_BUILD=1 bash ablation_study.sh jitter ./results/ablation-jitter
+SKIP_BUILD=1 bash ablation_study.sh jitter ./results/ablation-jitter erc20
 ```
 
 For a no-jitter sweep:
 
 ```bash
-SKIP_BUILD=1 bash ablation_study.sh dryrun ./results/ablation-dryrun
+SKIP_BUILD=1 bash ablation_study.sh dryrun ./results/ablation-dryrun uniswap
 ```
 
 By default the sweep covers:
@@ -97,6 +105,14 @@ By default the sweep covers:
 - `eager-snapshots`
 
 You can override the set with `MODES="..."`.
+
+Arguments:
+
+1. experiment kind: `jitter` or `dryrun`
+2. root output directory
+3. workload: `erc20`, `weth`, or `uniswap`
+
+The sweep writes results under `<root>/<workload>/<mode>/`.
 
 ## Microbenchmark Sweep
 

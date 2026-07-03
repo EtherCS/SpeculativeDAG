@@ -38,6 +38,13 @@ enum ExperimentMode {
     EagerSnapshots,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum WorkloadPreset {
+    Erc20,
+    Weth,
+    Uniswap,
+}
+
 #[derive(Parser)]
 enum Operation {
     /// Generate a committee file, parameters files and the private config files of all validators
@@ -88,6 +95,9 @@ enum Operation {
         /// Experiment mode used for ablation studies.
         #[clap(long, value_enum, default_value_t = ExperimentMode::Full)]
         experiment_mode: ExperimentMode,
+        /// Contract workload used for evaluation.
+        #[clap(long, value_enum, default_value_t = WorkloadPreset::Erc20)]
+        workload: WorkloadPreset,
     },
     /// Deploy a local validator with network jitter simulation for test.
     JitterRun {
@@ -118,6 +128,9 @@ enum Operation {
         /// Experiment mode used for ablation studies.
         #[clap(long, value_enum, default_value_t = ExperimentMode::Full)]
         experiment_mode: ExperimentMode,
+        /// Contract workload used for evaluation.
+        #[clap(long, value_enum, default_value_t = WorkloadPreset::Erc20)]
+        workload: WorkloadPreset,
     },
 }
 
@@ -165,7 +178,8 @@ async fn main() -> Result<()> {
             authority,
             committee_size,
             experiment_mode,
-        } => dryrun(authority, committee_size, experiment_mode).await?,
+            workload,
+        } => dryrun(authority, committee_size, experiment_mode, workload).await?,
         Operation::JitterRun {
             authority,
             committee_size,
@@ -176,6 +190,7 @@ async fn main() -> Result<()> {
             duration_secs,
             load,
             experiment_mode,
+            workload,
         } => {
             jitterrun(
                 authority,
@@ -187,6 +202,7 @@ async fn main() -> Result<()> {
                 duration_secs,
                 load,
                 experiment_mode,
+                workload,
             )
             .await?;
         }
@@ -317,21 +333,17 @@ async fn dryrun(
     authority: AuthorityIndex,
     committee_size: usize,
     experiment_mode: ExperimentMode,
+    workload: WorkloadPreset,
 ) -> Result<()> {
     tracing::warn!(
-        "Starting validator {authority} in dryrun mode (committee size: {committee_size})"
+        "Starting validator {authority} in dryrun mode (committee size: {committee_size}, workload: {:?})",
+        workload
     );
-    let num_clusters = 5;
-    let num_families_per_cluster = 5;
-    let num_people_per_family = 8;
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
     let client_parameters = ClientParameters::default();
-    let workload_type = pevm::api::WorkloadType::ERC20(
-        num_clusters,
-        num_families_per_cluster,
-        num_people_per_family,
-    );
+    let (workload_type, account_storage_path, account_addresses_path) =
+        benchmark_workload(workload);
     let node_parameters = apply_experiment_mode(
         NodeParameters::default().with_pevm_workload_type(workload_type),
         experiment_mode,
@@ -339,20 +351,12 @@ async fn dryrun(
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("dryrun-validator-{authority}"));
-    let account_storage_path = PathBuf::from(format!(
-        "storage_{}_{}_{}.json",
-        num_clusters, num_families_per_cluster, num_people_per_family
-    ));
-    let account_addresses_path = PathBuf::from(format!(
-        "account_addresses_{}_{}_{}.bin",
-        num_clusters, num_families_per_cluster, num_people_per_family
-    ));
 
     let mut all_private_config = NodePrivateConfig::new_for_benchmarks(
         &working_dir,
         committee_size,
-        account_storage_path,
-        account_addresses_path,
+        account_storage_path.into(),
+        account_addresses_path.into(),
     );
     let private_config = all_private_config.remove(authority as usize);
     match fs::remove_dir_all(&working_dir) {
@@ -399,21 +403,17 @@ async fn jitterrun(
     duration_secs: u64,
     load: usize,
     experiment_mode: ExperimentMode,
+    workload: WorkloadPreset,
 ) -> Result<()> {
     tracing::warn!(
-        "Starting validator {authority} in net jitter simulation mode (committee size: {committee_size}, fault num: {fault_num}, jitter ms: {jitter_ms}, duration secs: {duration_secs})"
+        "Starting validator {authority} in net jitter simulation mode (committee size: {committee_size}, fault num: {fault_num}, jitter ms: {jitter_ms}, duration secs: {duration_secs}, workload: {:?})",
+        workload
     );
-    let num_clusters = 5;
-    let num_families_per_cluster = 5;
-    let num_people_per_family = 8;
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
     let client_parameters = ClientParameters::default().with_load(load);
-    let workload_type = pevm::api::WorkloadType::ERC20(
-        num_clusters,
-        num_families_per_cluster,
-        num_people_per_family,
-    );
+    let (workload_type, account_storage_path, account_addresses_path) =
+        benchmark_workload(workload);
 
     // Set up network jitter simulation parameters
     let jitter_delay = Duration::from_millis(jitter_ms);
@@ -436,20 +436,12 @@ async fn jitterrun(
     let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
 
     let working_dir = PathBuf::from(format!("jitterrun-validator-{authority}"));
-    let account_storage_path = PathBuf::from(format!(
-        "storage_{}_{}_{}.json",
-        num_clusters, num_families_per_cluster, num_people_per_family
-    ));
-    let account_addresses_path = PathBuf::from(format!(
-        "account_addresses_{}_{}_{}.bin",
-        num_clusters, num_families_per_cluster, num_people_per_family
-    ));
 
     let mut all_private_config = NodePrivateConfig::new_for_benchmarks(
         &working_dir,
         committee_size,
-        account_storage_path,
-        account_addresses_path,
+        account_storage_path.into(),
+        account_addresses_path.into(),
     );
     let private_config = all_private_config.remove(authority as usize);
     match fs::remove_dir_all(&working_dir) {
@@ -484,6 +476,16 @@ async fn jitterrun(
     network_result.expect("Validator crashed");
 
     Ok(())
+}
+
+fn benchmark_workload(workload: WorkloadPreset) -> (pevm::api::WorkloadType, String, String) {
+    let workload_type = match workload {
+        WorkloadPreset::Erc20 => pevm::api::WorkloadType::ERC20(5, 5, 8),
+        WorkloadPreset::Weth => pevm::api::WorkloadType::WETH(5, 5, 8),
+        WorkloadPreset::Uniswap => pevm::api::WorkloadType::Uniswap(5, 5, 8),
+    };
+    let (storage_path, addresses_path) = workload_type.artifact_file_names();
+    (workload_type, storage_path, addresses_path)
 }
 
 fn apply_experiment_mode(

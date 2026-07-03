@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::DashMap;
 
-use crate::{erc20::contract::ERC20Token, vm::PevmTxExecutionResult, Pevm};
+use crate::{erc20::contract::ERC20Token, vm::PevmTxExecutionResult, weth::contract::WETH9, Pevm};
 
 use revm::primitives::{
     alloy_primitives::U160, BlockEnv, EvmState, SpecId, TransactTo, TxEnv, U256,
@@ -38,11 +38,12 @@ use alloy_primitives::Address as AlloyAddress;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter};
 use std::path::Path;
+use std::time::Duration as StdDuration;
 
 use serde::{Deserialize, Serialize};
 
-use super::erc20;
 use super::serialization::{deserializer, serializer};
+use super::{erc20, uniswap, weth};
 use crate::{chain::PevmEthereum, Bytecodes, ChainState, EvmAccount, InMemoryStorage};
 
 use serde_json;
@@ -53,6 +54,13 @@ fn save(storage: &InMemoryStorage, path: &str) -> anyhow::Result<()> {
     let file = File::create(path)?;
     let writer = BufWriter::new(file);
     serde_json::to_writer(writer, storage)?;
+    Ok(())
+}
+
+fn save_atomic(storage: &InMemoryStorage, path: &str) -> anyhow::Result<()> {
+    let tmp_path = format!("{path}.tmp.{}", std::process::id());
+    save(storage, &tmp_path)?;
+    fs::rename(tmp_path, path)?;
     Ok(())
 }
 
@@ -68,7 +76,9 @@ pub fn load_in_memory_storage(
     account_storage_path: String,
 ) -> InMemoryStorage {
     match workload_type {
-        WorkloadType::ERC20(_num_clusters, _num_families_per_cluster, _num_people_per_family) => {
+        WorkloadType::ERC20(_, _, _)
+        | WorkloadType::WETH(_, _, _)
+        | WorkloadType::Uniswap(_, _, _) => {
             tracing::info!("in memory storage file path: {}", account_storage_path);
             load(&account_storage_path).unwrap()
         }
@@ -80,7 +90,9 @@ pub fn load_account_addresses(
     account_addresses_path: String,
 ) -> Vec<(AlloyAddress, Vec<Vec<AlloyAddress>>)> {
     match workload_type {
-        WorkloadType::ERC20(_num_clusters, _num_families_per_cluster, _num_people_per_family) => {
+        WorkloadType::ERC20(_, _, _)
+        | WorkloadType::WETH(_, _, _)
+        | WorkloadType::Uniswap(_, _, _) => {
             tracing::info!("account addresses file path: {}", account_addresses_path);
             load_addresses(&account_addresses_path).unwrap()
         }
@@ -92,6 +104,13 @@ type Addresses = Vec<(AlloyAddress, Vec<Vec<AlloyAddress>>)>;
 fn save_addresses(path: &str, data: &Addresses) -> anyhow::Result<()> {
     let encoded = bincode::serialize(data)?; // binary encoding
     fs::write(path, encoded)?;
+    Ok(())
+}
+
+fn save_addresses_atomic(path: &str, data: &Addresses) -> anyhow::Result<()> {
+    let tmp_path = format!("{path}.tmp.{}", std::process::id());
+    save_addresses(&tmp_path, data)?;
+    fs::rename(tmp_path, path)?;
     Ok(())
 }
 
@@ -182,23 +201,33 @@ impl PevmAPI {
             .ok_or(APIError::NoScheduledTransactions)
     }
 
-    pub fn get_erc20_state_and_bytecode(
-        num_clusters: usize,
-        num_families_per_cluster: usize,
-        num_people_per_family: usize,
+    pub fn get_state_and_bytecode(
+        workload_type: &WorkloadType,
     ) -> (InMemoryStorage, Vec<(AlloyAddress, Vec<Vec<AlloyAddress>>)>) {
         let mut addresses = Vec::new();
         let mut final_state = ChainState::default();
         let mut final_bytecodes = Bytecodes::default();
         final_state.insert(AlloyAddress::ZERO, EvmAccount::default()); // Beneficiary
+        let (num_clusters, num_families_per_cluster, num_people_per_family) =
+            workload_type.dimensions();
         for _ in 0..num_clusters {
-            let (state, bytecodes, gld_address, families) = erc20::generate_state_and_byte_code(
-                num_families_per_cluster,
-                num_people_per_family,
-            );
+            let (state, bytecodes, contract_address, families) = match workload_type {
+                WorkloadType::ERC20(_, _, _) => erc20::generate_state_and_byte_code(
+                    num_families_per_cluster,
+                    num_people_per_family,
+                ),
+                WorkloadType::WETH(_, _, _) => weth::generate_state_and_byte_code(
+                    num_families_per_cluster,
+                    num_people_per_family,
+                ),
+                WorkloadType::Uniswap(_, _, _) => uniswap::generate_state_and_byte_code(
+                    num_families_per_cluster,
+                    num_people_per_family,
+                ),
+            };
             final_state.extend(state);
             final_bytecodes.extend(bytecodes);
-            addresses.push((gld_address, families));
+            addresses.push((contract_address, families));
         }
         let in_memory_storage =
             InMemoryStorage::new(final_state, Arc::new(final_bytecodes), Default::default());
@@ -216,11 +245,119 @@ pub enum ExecutionMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WorkloadType {
     ERC20(usize, usize, usize), // NUM_CLUSTERS, NUM_FAMILY_PER_CLUSTER, NUM_PEOPLE_PER_FAMILY
+    WETH(usize, usize, usize),  // NUM_CLUSTERS, NUM_FAMILY_PER_CLUSTER, NUM_PEOPLE_PER_FAMILY
+    Uniswap(usize, usize, usize), // NUM_CLUSTERS, NUM_FAMILY_PER_CLUSTER, NUM_PEOPLE_PER_FAMILY
 }
 
 impl Default for WorkloadType {
     fn default() -> Self {
         WorkloadType::ERC20(1, 1, 1) // or your preferred defaults
+    }
+}
+
+impl WorkloadType {
+    pub fn dimensions(&self) -> (usize, usize, usize) {
+        match self {
+            WorkloadType::ERC20(a, b, c)
+            | WorkloadType::WETH(a, b, c)
+            | WorkloadType::Uniswap(a, b, c) => (*a, *b, *c),
+        }
+    }
+
+    pub fn artifact_file_names(&self) -> (String, String) {
+        let (a, b, c) = self.dimensions();
+        match self {
+            WorkloadType::ERC20(_, _, _) => (
+                format!("storage_{}_{}_{}.json", a, b, c),
+                format!("account_addresses_{}_{}_{}.bin", a, b, c),
+            ),
+            WorkloadType::WETH(_, _, _) => (
+                format!("storage_weth_{}_{}_{}.json", a, b, c),
+                format!("account_addresses_weth_{}_{}_{}.bin", a, b, c),
+            ),
+            WorkloadType::Uniswap(_, _, _) => (
+                format!("storage_uniswap_{}_{}_{}.json", a, b, c),
+                format!("account_addresses_uniswap_{}_{}_{}.bin", a, b, c),
+            ),
+        }
+    }
+}
+
+pub fn ensure_workload_artifacts(
+    workload_type: &WorkloadType,
+    account_storage_path: &str,
+    account_addresses_path: &str,
+) -> anyhow::Result<()> {
+    fn artifacts_are_valid(
+        workload_type: &WorkloadType,
+        account_storage_path: &str,
+        account_addresses_path: &str,
+    ) -> bool {
+        if !Path::new(account_storage_path).exists() || !Path::new(account_addresses_path).exists() {
+            return false;
+        }
+        load(account_storage_path).is_ok()
+            && load_addresses(account_addresses_path).is_ok()
+            && match workload_type {
+                WorkloadType::ERC20(_, _, _)
+                | WorkloadType::WETH(_, _, _)
+                | WorkloadType::Uniswap(_, _, _) => true,
+            }
+    }
+
+    if artifacts_are_valid(workload_type, account_storage_path, account_addresses_path) {
+        return Ok(());
+    }
+
+    let lock_path = format!("{account_storage_path}.lock");
+    loop {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => break,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                if artifacts_are_valid(workload_type, account_storage_path, account_addresses_path) {
+                    return Ok(());
+                }
+                thread::sleep(StdDuration::from_millis(50));
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    let result = (|| -> anyhow::Result<()> {
+        if artifacts_are_valid(workload_type, account_storage_path, account_addresses_path) {
+            return Ok(());
+        }
+
+        tracing::info!(
+            "Materializing workload artifacts for {:?} into '{}' and '{}'",
+            workload_type,
+            account_storage_path,
+            account_addresses_path
+        );
+
+        let (in_memory_storage, account_addresses) = PevmAPI::get_state_and_bytecode(workload_type);
+        save_atomic(&in_memory_storage, account_storage_path)?;
+        save_addresses_atomic(account_addresses_path, &account_addresses)?;
+        Ok(())
+    })();
+
+    let _ = fs::remove_file(&lock_path);
+    result
+}
+
+pub fn remove_invalid_workload_artifacts(
+    account_storage_path: &str,
+    account_addresses_path: &str,
+) {
+    if load(account_storage_path).is_err() {
+        let _ = fs::remove_file(account_storage_path);
+    }
+    if load_addresses(account_addresses_path).is_err() {
+        let _ = fs::remove_file(account_addresses_path);
     }
 }
 
@@ -393,14 +530,19 @@ impl PevmTransactionGenerator {
         const MAX_PENDING_TRANSACTION_NUM: usize = 10000;
         const INITIAL_BATCH: usize = 10;
         let mut new_transactions = Vec::new();
+        let mut initial_batch_sent = false;
         tracing::info!("Start Running PEVM");
         loop {
             let batch = self.generate_transactions();
             // tracing::debug!("Generated {} new transactions", batch.len());
             new_transactions.extend(batch);
-            if new_transactions.len() >= MAX_PENDING_TRANSACTION_NUM + INITIAL_BATCH {
+            if !initial_batch_sent && new_transactions.len() >= INITIAL_BATCH {
                 let initial_batch_to_schedule = new_transactions.drain(..INITIAL_BATCH).collect();
                 self.pevm_txn_sender.send(initial_batch_to_schedule).await;
+                initial_batch_sent = true;
+                tracing::info!("Scheduled initial PEVM batch");
+            }
+            if new_transactions.len() >= MAX_PENDING_TRANSACTION_NUM {
                 break;
             }
         }
@@ -427,6 +569,8 @@ impl PevmTransactionGenerator {
                 Some(_) => self.generate_contended_erc20_transactions(),
                 None => self.generate_parallelizable_erc20_transactions(),
             },
+            WorkloadType::WETH(_, _, _) => self.generate_parallelizable_weth_transactions(),
+            WorkloadType::Uniswap(_, _, _) => self.generate_parallelizable_uniswap_transactions(),
         }
     }
 
@@ -435,7 +579,9 @@ impl PevmTransactionGenerator {
         let mut transactions = Vec::new();
 
         let num_people_per_family = match self.workload_type {
-            WorkloadType::ERC20(_, _, num_people_per_family) => num_people_per_family,
+            WorkloadType::ERC20(_, _, num_people_per_family)
+            | WorkloadType::WETH(_, _, num_people_per_family)
+            | WorkloadType::Uniswap(_, _, num_people_per_family) => num_people_per_family,
         };
 
         for counter in 0..num_people_per_family {
@@ -537,6 +683,132 @@ impl PevmTransactionGenerator {
             }
         }
         Vec::new()
+    }
+
+    fn generate_parallelizable_weth_transactions(&mut self) -> Vec<(String, Address)> {
+        const GAS_LIMIT: u64 = 90_000;
+        const AMOUNT: u64 = 10_000;
+        let mut transactions = Vec::new();
+
+        for (weth_address, families) in &self.clusters {
+            for family in families {
+                if family.len() < 2 {
+                    continue;
+                }
+                let operator = family[0];
+                let users = &family[1..];
+
+                for (index, user) in users.iter().enumerate() {
+                    if index % self.replica_num as usize != self.replica_id as usize {
+                        continue;
+                    }
+                    let recipient = users[(index + 1) % users.len()];
+                    let phase = self.nonce_map[user] % 4;
+
+                    let tx_env = match phase {
+                        0 => TxEnv {
+                            caller: *user,
+                            gas_limit: GAS_LIMIT,
+                            gas_price: U256::from(0xb2d05e07u64),
+                            transact_to: TransactTo::Call(*weth_address),
+                            data: WETH9::deposit(),
+                            value: U256::from(AMOUNT),
+                            nonce: Some(self.nonce_map[user]),
+                            chain_id: Some(1),
+                            ..TxEnv::default()
+                        },
+                        1 => TxEnv {
+                            caller: *user,
+                            gas_limit: GAS_LIMIT,
+                            gas_price: U256::from(0xb2d05e07u64),
+                            transact_to: TransactTo::Call(*weth_address),
+                            data: WETH9::approve(operator, U256::from(AMOUNT)),
+                            nonce: Some(self.nonce_map[user]),
+                            chain_id: Some(1),
+                            ..TxEnv::default()
+                        },
+                        2 => TxEnv {
+                            caller: operator,
+                            gas_limit: GAS_LIMIT,
+                            gas_price: U256::from(0xb2d05e07u64),
+                            transact_to: TransactTo::Call(*weth_address),
+                            data: WETH9::transfer_from(*user, recipient, U256::from(AMOUNT / 2)),
+                            nonce: Some(self.nonce_map[&operator]),
+                            chain_id: Some(1),
+                            ..TxEnv::default()
+                        },
+                        _ => TxEnv {
+                            caller: *user,
+                            gas_limit: GAS_LIMIT,
+                            gas_price: U256::from(0xb2d05e07u64),
+                            transact_to: TransactTo::Call(*weth_address),
+                            data: WETH9::withdraw(U256::from(AMOUNT / 4)),
+                            nonce: Some(self.nonce_map[user]),
+                            chain_id: Some(1),
+                            ..TxEnv::default()
+                        },
+                    };
+                    transactions.push(tx_env);
+                    if phase == 2 {
+                        self.nonce_map
+                            .entry(operator)
+                            .and_modify(|nonce| *nonce += 1)
+                            .or_insert(1);
+                    } else {
+                        self.nonce_map
+                            .entry(*user)
+                            .and_modify(|nonce| *nonce += 1)
+                            .or_insert(1);
+                    }
+                }
+            }
+        }
+
+        serializer::encode_batch_to_hex(transactions)
+    }
+
+    fn generate_parallelizable_uniswap_transactions(&mut self) -> Vec<(String, Address)> {
+        const GAS_LIMIT: u64 = 200_000;
+        let mut transactions = Vec::new();
+
+        let num_people_per_family = match self.workload_type {
+            WorkloadType::Uniswap(_, _, num_people_per_family) => num_people_per_family,
+            _ => unreachable!(),
+        };
+
+        for counter in 0..num_people_per_family {
+            if counter % self.replica_num as usize != self.replica_id as usize {
+                continue;
+            }
+            for (single_swap_address, families) in &self.clusters {
+                for family in families {
+                    let trader = family[counter];
+                    let phase = self.nonce_map[&trader] % 4;
+                    let data = match phase {
+                        0 => uniswap::sell_token0(U256::from(2_000u64)),
+                        1 => uniswap::sell_token1(U256::from(2_000u64)),
+                        2 => uniswap::buy_token0(U256::from(1_000u64), U256::from(2_000u64)),
+                        _ => uniswap::buy_token1(U256::from(1_000u64), U256::from(2_000u64)),
+                    };
+                    transactions.push(TxEnv {
+                        caller: trader,
+                        gas_limit: GAS_LIMIT,
+                        gas_price: U256::from(0xb2d05e07u64),
+                        transact_to: TransactTo::Call(*single_swap_address),
+                        data,
+                        nonce: Some(self.nonce_map[&trader]),
+                        chain_id: Some(1),
+                        ..TxEnv::default()
+                    });
+                    self.nonce_map
+                        .entry(trader)
+                        .and_modify(|nonce| *nonce += 1)
+                        .or_insert(1);
+                }
+            }
+        }
+
+        serializer::encode_batch_to_hex(transactions)
     }
 }
 

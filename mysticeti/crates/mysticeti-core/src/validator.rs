@@ -99,6 +99,16 @@ impl Validator {
 
         let workload_type = public_config.parameters.pevm_workload_type.clone();
         tracing::info!("Using workload type: {:?}", workload_type);
+        pevm::api::remove_invalid_workload_artifacts(
+            private_config.account_storage_path.to_str().unwrap(),
+            private_config.account_addresses_path.to_str().unwrap(),
+        );
+        pevm::api::ensure_workload_artifacts(
+            &workload_type,
+            private_config.account_storage_path.to_str().unwrap(),
+            private_config.account_addresses_path.to_str().unwrap(),
+        )
+        .expect("failed to materialize workload artifacts");
 
         // let in_memory_storage = pevm::api::load_in_memory_storage(&workload_type);
         // let account_addresses = pevm::api::load_account_addresses(&workload_type);

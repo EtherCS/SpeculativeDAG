@@ -2,13 +2,25 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CALLER_PWD="$(pwd)"
+BIN_PATH="${PROJECT_ROOT}/target/debug/mysticeti"
+
 COMMITTEE_SIZE=${1:-4}
 DURATION=${2:-15}
 EXPERIMENT_MODE=${3:-full}
-OUTPUT_DIR=${4:-"./results/speculative-${EXPERIMENT_MODE}-$(date +%Y%m%d-%H%M%S)"}
+WORKLOAD=${4:-erc20}
+OUTPUT_DIR=${5:-"./results/speculative-${EXPERIMENT_MODE}-${WORKLOAD}-$(date +%Y%m%d-%H%M%S)"}
 SKIP_BUILD=${SKIP_BUILD:-0}
 
-if [ "${SKIP_BUILD}" != "1" ]; then
+if [[ "${OUTPUT_DIR}" != /* ]]; then
+    OUTPUT_DIR="${CALLER_PWD}/${OUTPUT_DIR}"
+fi
+
+cd "${PROJECT_ROOT}"
+
+if [ "${SKIP_BUILD}" != "1" ] || [ ! -x "${BIN_PATH}" ]; then
     cargo build 2>&1 >/dev/null | tail -n 10
 fi
 
@@ -22,10 +34,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Starting validators in mode=${EXPERIMENT_MODE}..."
+echo "Starting validators in mode=${EXPERIMENT_MODE} workload=${WORKLOAD}..."
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
-    tmux new -d -s "v${i}" "cargo run --bin mysticeti -- dry-run --committee-size ${COMMITTEE_SIZE} --authority ${i} --experiment-mode ${EXPERIMENT_MODE} > ${OUTPUT_DIR}/v${i}.log.ansi"
+    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && ${BIN_PATH} dry-run --committee-size ${COMMITTEE_SIZE} --authority ${i} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
 done
 
 sleep "${DURATION}"
@@ -39,10 +51,11 @@ experiment=speculative
 committee_size=${COMMITTEE_SIZE}
 duration=${DURATION}
 experiment_mode=${EXPERIMENT_MODE}
+workload=${WORKLOAD}
 EOF
 
-if [ -f scripts/summarize_metrics.py ]; then
-    python3 scripts/summarize_metrics.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/summary.csv"
+if [ -f "${SCRIPT_DIR}/summarize_metrics.py" ]; then
+    python3 "${SCRIPT_DIR}/summarize_metrics.py" "${OUTPUT_DIR}" > "${OUTPUT_DIR}/summary.csv"
 fi
 
 echo "Results written to ${OUTPUT_DIR}"

@@ -2,18 +2,31 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CALLER_PWD="$(pwd)"
+
 EXPERIMENT_KIND=${1:-jitter}
 ROOT_DIR=${2:-"./results/ablation-$(date +%Y%m%d-%H%M%S)"}
+WORKLOAD=${3:-erc20}
 MODES=${MODES:-"full eac no-aps no-snapshots eager-snapshots"}
+
+if [[ "${ROOT_DIR}" != /* ]]; then
+    ROOT_DIR="${CALLER_PWD}/${ROOT_DIR}"
+fi
 
 mkdir -p "${ROOT_DIR}"
 
 for mode in ${MODES}; do
-    out_dir="${ROOT_DIR}/${mode}"
+    out_dir="${ROOT_DIR}/${WORKLOAD}/${mode}"
     if [ "${EXPERIMENT_KIND}" = "dryrun" ]; then
-        bash speculative.sh "${COMMITTEE_SIZE:-4}" "${DURATION:-60}" "${mode}" "${out_dir}"
+        bash "${SCRIPT_DIR}/speculative.sh" \
+            "${COMMITTEE_SIZE:-4}" \
+            "${DURATION:-60}" \
+            "${mode}" \
+            "${WORKLOAD}" \
+            "${out_dir}"
     else
-        bash jitterrun.sh \
+        bash "${SCRIPT_DIR}/jitterrun.sh" \
             "${TOTAL_DURATION:-90}" \
             "${COMMITTEE_SIZE:-7}" \
             "${FAULT_NUM:-4}" \
@@ -23,8 +36,9 @@ for mode in ${MODES}; do
             "${JITTER_DURATION:-90}" \
             "${LOAD:-100}" \
             "${mode}" \
+            "${WORKLOAD}" \
             "${out_dir}"
     fi
 done
 
-echo "Ablation sweep complete under ${ROOT_DIR}"
+echo "Ablation sweep complete under ${ROOT_DIR} for workload=${WORKLOAD}"

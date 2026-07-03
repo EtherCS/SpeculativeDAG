@@ -234,6 +234,8 @@ pub use api::{APIError, PevmAPI};
 mod common;
 pub mod erc20;
 pub mod serialization;
+pub mod uniswap;
+pub mod weth;
 
 #[cfg(feature = "rpc-storage")]
 pub use storage::RpcStorage;

@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CALLER_PWD="$(pwd)"
+BIN_PATH="${PROJECT_ROOT}/target/debug/mysticeti"
+
 DURATION=${1:-90}
 COMMITTEE_SIZE=${2:-7}
 FAULT_NUM=${3:-1}
@@ -11,10 +16,17 @@ JITTER_START_TIME=${6:-10}
 JITTER_DURATION=${7:-50}
 LOAD=${8:-100}
 EXPERIMENT_MODE=${9:-full}
-OUTPUT_DIR=${10:-"./results/jitter-${EXPERIMENT_MODE}-$(date +%Y%m%d-%H%M%S)"}
+WORKLOAD=${10:-erc20}
+OUTPUT_DIR=${11:-"./results/jitter-${EXPERIMENT_MODE}-${WORKLOAD}-$(date +%Y%m%d-%H%M%S)"}
 SKIP_BUILD=${SKIP_BUILD:-0}
 
-if [ "${SKIP_BUILD}" != "1" ]; then
+if [[ "${OUTPUT_DIR}" != /* ]]; then
+    OUTPUT_DIR="${CALLER_PWD}/${OUTPUT_DIR}"
+fi
+
+cd "${PROJECT_ROOT}"
+
+if [ "${SKIP_BUILD}" != "1" ] || [ ! -x "${BIN_PATH}" ]; then
     cargo build 2>&1 >/dev/null | tail -n 10
 fi
 
@@ -28,10 +40,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Starting validators in mode=${EXPERIMENT_MODE} with network jitter..."
+echo "Starting validators in mode=${EXPERIMENT_MODE} workload=${WORKLOAD} with network jitter..."
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
-    tmux new -d -s "v${i}" "cargo run --bin mysticeti -- jitter-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --fault-num ${FAULT_NUM} --delay-connection-num ${DELAY_CONNECTION_NUM} --jitter-ms ${JITTER_MS} --start-time ${JITTER_START_TIME} --duration-secs ${JITTER_DURATION} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} > ${OUTPUT_DIR}/v${i}.log.ansi"
+    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && ${BIN_PATH} jitter-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --fault-num ${FAULT_NUM} --delay-connection-num ${DELAY_CONNECTION_NUM} --jitter-ms ${JITTER_MS} --start-time ${JITTER_START_TIME} --duration-secs ${JITTER_DURATION} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
 done
 
 sleep "${DURATION}"
@@ -51,10 +63,11 @@ jitter_start_time=${JITTER_START_TIME}
 jitter_duration=${JITTER_DURATION}
 load=${LOAD}
 experiment_mode=${EXPERIMENT_MODE}
+workload=${WORKLOAD}
 EOF
 
-if [ -f scripts/summarize_metrics.py ]; then
-    python3 scripts/summarize_metrics.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/summary.csv"
+if [ -f "${SCRIPT_DIR}/summarize_metrics.py" ]; then
+    python3 "${SCRIPT_DIR}/summarize_metrics.py" "${OUTPUT_DIR}" > "${OUTPUT_DIR}/summary.csv"
 fi
 
 echo "Results written to ${OUTPUT_DIR}"
