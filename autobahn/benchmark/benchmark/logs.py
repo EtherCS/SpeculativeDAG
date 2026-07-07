@@ -110,6 +110,10 @@ class LogParser:
             r'EVM execution mode: ([^.]+)\. Workload: ([^.]+)\. PEVM executor: ([^\n]+)',
             log,
         )
+        asynchrony_match = search(
+            r'Simulated asynchrony: (true|false)\. Start: (\d+) ms\. Duration: (\d+) ms',
+            log,
+        )
         configs = {
             #'timeout_delay': int(
             #    search(r'Timeout delay .* (\d+)', log).group(1)
@@ -138,6 +142,9 @@ class LogParser:
             'execution': execution_match.group(1).strip() if execution_match else 'none',
             'workload': execution_match.group(2).strip() if execution_match else 'none',
             'executor': execution_match.group(3).strip() if execution_match else 'unknown',
+            'simulate_asynchrony': asynchrony_match.group(1) == 'true' if asynchrony_match else False,
+            'asynchrony_start': int(asynchrony_match.group(2)) if asynchrony_match else 0,
+            'asynchrony_duration': int(asynchrony_match.group(3)) if asynchrony_match else 0,
         }
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
@@ -222,6 +229,9 @@ class LogParser:
         execution = self.configs[0]['execution']
         workload = self.configs[0]['workload']
         executor = self.configs[0]['executor']
+        simulate_asynchrony = self.configs[0]['simulate_asynchrony']
+        asynchrony_start = self.configs[0]['asynchrony_start']
+        asynchrony_duration = self.configs[0]['asynchrony_duration']
 
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
@@ -241,6 +251,9 @@ class LogParser:
             f' Execution: {execution}\n'
             f' Workload: {workload}\n'
             f' Executor: {executor}\n'
+            f' Simulated asynchrony: {simulate_asynchrony}\n'
+            f' Asynchrony start: {asynchrony_start:,} ms\n'
+            f' Asynchrony duration: {asynchrony_duration:,} ms\n'
             f' Input rate: {sum(self.rate):,} tx/s\n'
             f' Transaction size: {self.size[0]:,} B\n'
             f' Execution time: {round(duration):,} s\n'

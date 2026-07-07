@@ -44,6 +44,12 @@ Print the summary for the latest local run:
 fab logs
 ```
 
+Run a jitter/asynchrony evaluation with the helper script:
+
+```bash
+bash jitterrun.sh 60 4 1 400 10 50 ordered erc20 sequential
+```
+
 ## Parameters
 
 `fab local` currently accepts these parameters:
@@ -56,6 +62,24 @@ fab logs
 - `num_clusters`: synthetic account/workload generation parameter. Default: `5`.
 - `families_per_cluster`: synthetic account/workload generation parameter. Default: `5`.
 - `people_per_family`: synthetic account/workload generation parameter. Default: `8`.
+- `faults`: faulty nodes omitted from the local deployment. Default: `0`.
+- `nodes`: committee size for local benchmarking. Default: `4`.
+- `workers`: workers per node. Default: `1`.
+- `rate`: total input rate in tx/s. Default: `400`.
+- `tx_size`: transaction size in bytes. Default: `512`.
+- `duration`: benchmark duration in seconds. Default: `60`.
+- `runs`: number of benchmark repetitions encoded in the config. Default: `1`.
+- `simulate_asynchrony`: enable the built-in Autobahn asynchrony simulation. Default: `False`.
+- `asynchrony_start`: asynchrony start time in milliseconds after slot 1 commits. Default: `15000`.
+- `asynchrony_duration`: asynchrony duration in milliseconds. Default: `3000`.
+
+The dedicated `fab jitter` task enables `simulate_asynchrony=True` automatically and defaults to:
+
+- `execution=ordered`
+- `workload=erc20`
+- `executor=sequential`
+- `asynchrony_start=10000`
+- `asynchrony_duration=50000`
 
 The benchmark configuration embedded in `fabfile.py` currently uses:
 
@@ -71,13 +95,13 @@ The benchmark configuration embedded in `fabfile.py` currently uses:
 Each benchmark run writes logs into its own folder:
 
 ```text
-autobahn/benchmark/logs/[execution]-[workload]-[executor]-[timestamp]/
+autobahn/benchmark/logs/[experiment]-[execution]-[workload]-[executor]-[timestamp]/
 ```
 
 Example:
 
 ```text
-autobahn/benchmark/logs/speculative-uniswap-sequential-20260703-153012/
+autobahn/benchmark/logs/jitter-ordered-erc20-sequential-20260705-101530/
 ```
 
 Each run directory contains:
@@ -95,6 +119,7 @@ The printed summary contains:
 
 - `Faults`, `Committee size`, `Worker(s) per node)`: deployment shape
 - `Execution`, `Workload`, `Executor`: the execution configuration used for this run
+- `Simulated asynchrony`, `Asynchrony start`, `Asynchrony duration`: whether the jitter/asynchrony mode was enabled and when it ran
 - `Input rate`, `Transaction size`, `Execution time`: client-side benchmark settings
 - `Header size`, `Max header delay`, `GC depth`, `Sync retry delay`, `Sync retry nodes`, `Batch size`, `Max batch delay`: protocol configuration parsed from the node logs
 - `Consensus TPS/BPS/latency`: ordering-layer throughput and latency
@@ -106,3 +131,4 @@ The parser measures end-to-end latency using sampled transactions that are logge
 
 - `fab local` suppresses compiler warnings during the build step to keep benchmark output readable.
 - If you want to inspect raw process output while a benchmark is running, use `tmux ls` and open the corresponding session.
+- `jitterrun.sh` stores a human-readable summary in `results/.../summary.txt` and symlinks the matching raw logs directory into `results/.../logs`.

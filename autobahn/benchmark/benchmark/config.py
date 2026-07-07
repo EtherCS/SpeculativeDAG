@@ -186,11 +186,16 @@ class NodeParameters:
             inputs += [json['sync_retry_nodes']]
             inputs += [json['batch_size']]
             inputs += [json['max_batch_delay']]
+            inputs += [json['asynchrony_start']]
+            inputs += [json['asynchrony_duration']]
         except KeyError as e:
             raise ConfigError(f'Malformed parameters: missing key {e}')
 
         if not all(isinstance(x, int) for x in inputs):
             raise ConfigError('Invalid parameters type')
+
+        if not isinstance(json['simulate_asynchrony'], bool):
+            raise ConfigError('Invalid simulate_asynchrony type')
 
         self.json = json
 

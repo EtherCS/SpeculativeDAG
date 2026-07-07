@@ -10,16 +10,18 @@ from benchmark.remote import Bench, BenchError
 
 
 def _make_bench_params(workload='erc20', artifacts='.', num_clusters=5,
-                       families_per_cluster=5, people_per_family=8):
+                       families_per_cluster=5, people_per_family=8,
+                       faults=0, nodes=4, workers=1, rate=400,
+                       tx_size=512, duration=60, runs=1):
     return {
-        'faults': 0,
-        'nodes': [4],
-        'workers': 1,
+        'faults': int(faults),
+        'nodes': [int(nodes)],
+        'workers': int(workers),
         'co-locate': True,
-        'rate': [400],
-        'tx_size': 512,
-        'duration': 60,
-        'runs': 1,
+        'rate': [int(rate)],
+        'tx_size': int(tx_size),
+        'duration': int(duration),
+        'runs': int(runs),
 
         # EVM benchmark client config.
         'workload': None if workload in (None, '', 'none') else workload,
@@ -38,7 +40,8 @@ def _make_bench_params(workload='erc20', artifacts='.', num_clusters=5,
 
 def _make_node_params(execution='none', workload='erc20', executor='sequential',
                       artifacts='.', num_clusters=5, families_per_cluster=5,
-                      people_per_family=8):
+                      people_per_family=8, simulate_asynchrony=False,
+                      asynchrony_start=15_000, asynchrony_duration=3_000):
     return {
         'timeout_delay': 5_000,  # ms
         'header_size': 32,  # bytes
@@ -56,9 +59,9 @@ def _make_node_params(execution='none', workload='erc20', executor='sequential',
         'use_ride_share': False,
         'car_timeout': 5_000,
 
-        'simulate_asynchrony': False,
-        'asynchrony_start': 15_000, #ms
-        'asynchrony_duration': 3_000, #ms
+        'simulate_asynchrony': bool(simulate_asynchrony),
+        'asynchrony_start': int(asynchrony_start), #ms
+        'asynchrony_duration': int(asynchrony_duration), #ms
 
         # EVM execution config for primaries.
         'evm_execution_mode': execution,
@@ -74,7 +77,10 @@ def _make_node_params(execution='none', workload='erc20', executor='sequential',
 @task
 def local(ctx, debug=True, execution='none', workload='erc20',
           executor='sequential', artifacts='.', num_clusters=5,
-          families_per_cluster=5, people_per_family=8):
+          families_per_cluster=5, people_per_family=8,
+          simulate_asynchrony=False, asynchrony_start=15_000,
+          asynchrony_duration=3_000, faults=0, nodes=4, workers=1,
+          rate=400, tx_size=512, duration=60, runs=1):
     ''' Run benchmarks on localhost '''
     bench_params = _make_bench_params(
         workload=workload,
@@ -82,6 +88,13 @@ def local(ctx, debug=True, execution='none', workload='erc20',
         num_clusters=num_clusters,
         families_per_cluster=families_per_cluster,
         people_per_family=people_per_family,
+        faults=faults,
+        nodes=nodes,
+        workers=workers,
+        rate=rate,
+        tx_size=tx_size,
+        duration=duration,
+        runs=runs,
     )
     node_params = _make_node_params(
         execution=execution,
@@ -91,6 +104,9 @@ def local(ctx, debug=True, execution='none', workload='erc20',
         num_clusters=num_clusters,
         families_per_cluster=families_per_cluster,
         people_per_family=people_per_family,
+        simulate_asynchrony=simulate_asynchrony,
+        asynchrony_start=asynchrony_start,
+        asynchrony_duration=asynchrony_duration,
     )
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
@@ -156,7 +172,10 @@ def install(ctx):
 @task
 def remote(ctx, debug=True, execution='none', workload='erc20',
            executor='sequential', artifacts='.', num_clusters=5,
-           families_per_cluster=5, people_per_family=8):
+           families_per_cluster=5, people_per_family=8,
+           simulate_asynchrony=False, asynchrony_start=15_000,
+           asynchrony_duration=3_000, faults=0, nodes=4, workers=1,
+           rate=400, tx_size=512, duration=60, runs=1):
     ''' Run benchmarks on AWS '''
     bench_params = _make_bench_params(
         workload=workload,
@@ -164,6 +183,13 @@ def remote(ctx, debug=True, execution='none', workload='erc20',
         num_clusters=num_clusters,
         families_per_cluster=families_per_cluster,
         people_per_family=people_per_family,
+        faults=faults,
+        nodes=nodes,
+        workers=workers,
+        rate=rate,
+        tx_size=tx_size,
+        duration=duration,
+        runs=runs,
     )
     node_params = _make_node_params(
         execution=execution,
@@ -173,6 +199,9 @@ def remote(ctx, debug=True, execution='none', workload='erc20',
         num_clusters=num_clusters,
         families_per_cluster=families_per_cluster,
         people_per_family=people_per_family,
+        simulate_asynchrony=simulate_asynchrony,
+        asynchrony_start=asynchrony_start,
+        asynchrony_duration=asynchrony_duration,
     )
     try:
         Bench(ctx).run(bench_params, node_params, debug)
@@ -215,3 +244,44 @@ def logs(ctx):
         print(LogParser.process(directory, faults='?').result())
     except ParseError as e:
         Print.error(BenchError('Failed to parse logs', e))
+
+
+@task
+def jitter(ctx, debug=True, execution='ordered', workload='erc20',
+           executor='sequential', artifacts='.', num_clusters=5,
+           families_per_cluster=5, people_per_family=8,
+           asynchrony_start=10_000, asynchrony_duration=50_000,
+           faults=0, nodes=4, workers=1, rate=400, tx_size=512,
+           duration=60, runs=1):
+    ''' Run a local jitter/asynchrony benchmark on localhost '''
+    bench_params = _make_bench_params(
+        workload=workload,
+        artifacts=artifacts,
+        num_clusters=num_clusters,
+        families_per_cluster=families_per_cluster,
+        people_per_family=people_per_family,
+        faults=faults,
+        nodes=nodes,
+        workers=workers,
+        rate=rate,
+        tx_size=tx_size,
+        duration=duration,
+        runs=runs,
+    )
+    node_params = _make_node_params(
+        execution=execution,
+        workload=workload,
+        executor=executor,
+        artifacts=artifacts,
+        num_clusters=num_clusters,
+        families_per_cluster=families_per_cluster,
+        people_per_family=people_per_family,
+        simulate_asynchrony=True,
+        asynchrony_start=asynchrony_start,
+        asynchrony_duration=asynchrony_duration,
+    )
+    try:
+        ret = LocalBench(bench_params, node_params).run(debug)
+        print(ret.result())
+    except BenchError as e:
+        Print.error(e)

@@ -41,8 +41,13 @@ class LocalBench:
         execution = self.node_parameters.json.get('evm_execution_mode', 'none')
         workload = self.node_parameters.json.get('evm_workload', 'none')
         executor = self.node_parameters.json.get('evm_executor_mode', 'unknown')
+        experiment = (
+            'jitter'
+            if self.node_parameters.json.get('simulate_asynchrony', False)
+            else 'local'
+        )
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-        run_name = f'{execution}-{workload}-{executor}-{timestamp}'
+        run_name = f'{experiment}-{execution}-{workload}-{executor}-{timestamp}'
         PathMaker.set_logs_path(f'logs/{run_name}')
         return run_name
 

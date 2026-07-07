@@ -166,6 +166,10 @@ impl Parameters {
         info!("Parallel Proposals enabled? {}. K: {}", self.use_parallel_proposals, self.k);
         info!("Ride share enabled? {}. Car timeout: {}", self.use_ride_share, self.car_timeout);
         info!(
+            "Simulated asynchrony: {}. Start: {} ms. Duration: {} ms",
+            self.simulate_asynchrony, self.asynchrony_start, self.asynchrony_duration
+        );
+        info!(
             "EVM execution mode: {}. Workload: {}. PEVM executor: {}",
             self.evm_execution_mode, self.evm_workload, self.evm_executor_mode
         );
