@@ -159,6 +159,12 @@ impl<H: BlockHandler> Core<H> {
             UniversalCommitterBuilder::new(committee.clone(), block_store.clone(), metrics.clone())
                 .with_number_of_leaders(public_config.parameters.number_of_leaders)
                 .with_pipeline(public_config.parameters.enable_pipelining)
+                .with_direct_commit_stall(
+                    public_config
+                        .parameters
+                        .direct_commit_stall_simulation
+                        .clone(),
+                )
                 .build();
         tracing::info!(
             "Pipeline enabled: {}",
