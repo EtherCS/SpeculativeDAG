@@ -194,6 +194,48 @@ Each run is written to:
 - `./results/ablation-snapshot-speculative-<mode>-<committee_size>-<timestamp>/`
 - `./results/ablation-snapshot-jitter-<mode>-<committee_size>-<fault_num>-<timestamp>/`
 
+## Snapshot Attack Ablation
+
+Run the snapshot-policy ablation with consecutive direct-commit stalls instead of network jitter:
+
+```bash
+SKIP_BUILD=1 bash scripts/ablation_snapshot_attack.sh 3
+```
+
+The positional argument is `REPEAT`, the number of times to repeat the complete sweep. For every
+snapshot policy and committee size, the script runs both a normal speculative control and a
+commit-stall attack. The default matrix is:
+
+- modes: `full`, `no-snapshots`, and `eager-snapshots`
+- committee sizes: `10` and `30`
+- workload: `erc20`
+- load: `100`
+- total duration: `300` seconds
+- attack interval: `[1, 250)` seconds, leaving 50 seconds to measure catch-up
+
+Experiment parameters can be overridden through environment variables:
+
+```bash
+SKIP_BUILD=1 \
+TOTAL_DURATION=300 \
+STALL_START=10 \
+STALL_END=280 \
+LOAD=100 \
+WORKLOAD=erc20 \
+COMMITTEE_SIZES="10 30" \
+MODES="full no-snapshots eager-snapshots" \
+bash scripts/ablation_snapshot_attack.sh 3
+```
+
+`TOTAL_DURATION` must be greater than `STALL_END`, and `STALL_END` must be greater than
+`STALL_START`. Results are organized as:
+
+- `./results/ablation-snapshot-attack/speculative/<mode>-<committee_size>-<timestamp>/`
+- `./results/ablation-snapshot-attack/attack/<mode>-<committee_size>-<timestamp>/`
+
+Each leaf directory contains validator logs, raw metrics, `run-meta.txt`, and `summary.csv` in the
+same format as the other experiment scripts.
+
 ## Microbenchmark Sweep
 
 Run a simple load sweep for a chosen mode:
