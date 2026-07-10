@@ -44,8 +44,10 @@ stop_validator_pids() {
 }
 
 stop_registered_validators() {
-    tmux kill-server 2>/dev/null || true
     stop_validator_pids "${VALIDATOR_PIDS[@]}"
+    tmux kill-server 2>/dev/null || true
+    # The pane PID can be a shell whose child survives after tmux exits.
+    stop_stale_validators
     VALIDATOR_PIDS=()
 }
 

@@ -48,6 +48,7 @@ fi
 export RUST_LOG=warn,mysticeti_core::consensus=debug,mysticeti_core::core=debug,mysticeti_core::speculative_executor=debug,mysticeti_core::executor=info,pevm=info
 
 mkdir -p "${OUTPUT_DIR}"
+stop_stale_validators
 tmux kill-server 2>/dev/null || true
 stop_stale_validators
 
