@@ -11,7 +11,7 @@ TOTAL_DURATION=${TOTAL_DURATION:-300}
 STALL_START=${STALL_START:-1}
 STALL_END=${STALL_END:-250}
 COMMITTEE_SIZES=(${COMMITTEE_SIZES:-10 30})
-MODES=(${MODES:-full no-snapshots eager-snapshots})
+MODES=(${MODES:-full no-snapshots eager-snapshots eac})
 
 if (( STALL_END <= STALL_START )); then
     echo "STALL_END must be greater than STALL_START" >&2
