@@ -651,7 +651,7 @@ impl<H: BlockHandler> Core<H> {
         let last_committed_round = committed.last().unwrap().anchor.round;
         let predict_start_round = self.aps_tree.start_round;
         let mut consistent_committed_leader_num = 0;
-        let mut decided_leader_num = 0;
+        let decided_leader_num = (last_committed_round - predict_start_round + 1) as usize;
         let mut committed_leaders = vec![];
         for sub_dag in committed {
             committed_leaders.push(sub_dag.anchor);
@@ -676,7 +676,6 @@ impl<H: BlockHandler> Core<H> {
                     committed_leaders.remove(0);
                 }
             }
-            decided_leader_num = (leader_prediction.round() - predict_start_round + 1) as usize;
         }
         (consistent_committed_leader_num, decided_leader_num)
     }
