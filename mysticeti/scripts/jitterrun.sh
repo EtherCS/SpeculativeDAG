@@ -29,7 +29,14 @@ fi
 
 cd "${PROJECT_ROOT}"
 
-if [ "${SKIP_BUILD}" != "1" ] || [ ! -x "${BIN_PATH}" ]; then
+NEWER_SOURCE=""
+if [ -x "${BIN_PATH}" ]; then
+    NEWER_SOURCE=$(find "${PROJECT_ROOT}/crates" -type f \( -name '*.rs' -o -name 'Cargo.toml' \) -newer "${BIN_PATH}" -print -quit)
+fi
+if [ "${SKIP_BUILD}" != "1" ] || [ ! -x "${BIN_PATH}" ] || [ -n "${NEWER_SOURCE}" ]; then
+    if [ -n "${NEWER_SOURCE}" ]; then
+        echo "Source changes detected; rebuilding ${BIN_PATH} despite SKIP_BUILD=1"
+    fi
     cargo build 2>&1 >/dev/null | tail -n 10
 fi
 
