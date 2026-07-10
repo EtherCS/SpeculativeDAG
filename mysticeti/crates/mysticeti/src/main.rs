@@ -14,8 +14,9 @@ use eyre::{eyre, Context, Result};
 use mysticeti_core::{
     committee::Committee,
     config::{
-        ClientParameters, ImportExport, NetworkJitterSimulation, NodeParameters, NodePrivateConfig,
-        NodePublicConfig, SpeculationPredictionPolicy, SpeculationSnapshotPolicy,
+        ClientParameters, DirectCommitStallSimulation, ImportExport, NetworkJitterSimulation,
+        NodeParameters, NodePrivateConfig, NodePublicConfig, SpeculationPredictionPolicy,
+        SpeculationSnapshotPolicy,
     },
     types::AuthorityIndex,
     validator::Validator,
@@ -136,6 +137,30 @@ enum Operation {
         #[clap(long, value_enum, default_value_t = WorkloadPreset::Erc20)]
         workload: WorkloadPreset,
     },
+    /// Run a local validator while emulating a consecutive direct-commit stall.
+    AttackRun {
+        /// The authority index of this node.
+        #[clap(long, value_name = "INT")]
+        authority: AuthorityIndex,
+        /// The number of authorities in the committee.
+        #[clap(long, value_name = "INT")]
+        committee_size: usize,
+        /// Seconds after startup at which direct decisions begin to stall.
+        #[clap(long, value_name = "INT")]
+        stall_start: u64,
+        /// Seconds after startup at which direct decisions resume.
+        #[clap(long, value_name = "INT")]
+        stall_end: u64,
+        /// The transaction load.
+        #[clap(long, value_name = "INT")]
+        load: usize,
+        /// Experiment mode used for ablation studies.
+        #[clap(long, value_enum, default_value_t = ExperimentMode::Full)]
+        experiment_mode: ExperimentMode,
+        /// Contract workload used for evaluation.
+        #[clap(long, value_enum, default_value_t = WorkloadPreset::Erc20)]
+        workload: WorkloadPreset,
+    },
 }
 
 #[tokio::main]
@@ -205,6 +230,26 @@ async fn main() -> Result<()> {
                 jitter_ms,
                 start_time,
                 duration_secs,
+                load,
+                experiment_mode,
+                workload,
+            )
+            .await?;
+        }
+        Operation::AttackRun {
+            authority,
+            committee_size,
+            stall_start,
+            stall_end,
+            load,
+            experiment_mode,
+            workload,
+        } => {
+            attackrun(
+                authority,
+                committee_size,
+                stall_start,
+                stall_end,
                 load,
                 experiment_mode,
                 workload,
@@ -469,6 +514,77 @@ async fn jitterrun(
             ))
         }
     }
+
+    let validator = Validator::start(
+        authority,
+        committee,
+        public_config,
+        private_config,
+        client_parameters,
+    )
+    .await?;
+    let (network_result, _metrics_result) = validator.await_completion().await;
+    network_result.expect("Validator crashed");
+
+    Ok(())
+}
+
+async fn attackrun(
+    authority: AuthorityIndex,
+    committee_size: usize,
+    stall_start: u64,
+    stall_end: u64,
+    load: usize,
+    experiment_mode: ExperimentMode,
+    workload: WorkloadPreset,
+) -> Result<()> {
+    if stall_end <= stall_start {
+        return Err(eyre!(
+            "stall-end ({stall_end}) must be greater than stall-start ({stall_start})"
+        ));
+    }
+    tracing::warn!(
+        "Starting validator {authority} in direct-commit stall mode (committee size: {committee_size}, stall: [{stall_start}, {stall_end}), workload: {:?})",
+        workload
+    );
+
+    let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
+    let committee = Committee::new_for_benchmarks(committee_size);
+    let client_parameters = ClientParameters::default().with_load(load);
+    let (workload_type, account_storage_path, account_addresses_path) =
+        benchmark_workload(workload);
+    let mut node_parameters = apply_experiment_mode(
+        NodeParameters::default().with_pevm_workload_type(workload_type),
+        experiment_mode,
+    );
+    node_parameters.direct_commit_stall_simulation = Some(DirectCommitStallSimulation::new(
+        Duration::from_secs(stall_start),
+        Duration::from_secs(stall_end - stall_start),
+    ));
+    let public_config = NodePublicConfig::new_for_benchmarks(ips, Some(node_parameters));
+
+    let working_dir = PathBuf::from(format!("attackrun-validator-{authority}"));
+    let mut all_private_config = NodePrivateConfig::new_for_benchmarks(
+        &working_dir,
+        committee_size,
+        account_storage_path.into(),
+        account_addresses_path.into(),
+    );
+    let private_config = all_private_config.remove(authority as usize);
+    match fs::remove_dir_all(&working_dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).wrap_err(format!(
+                "Failed to remove directory '{}'",
+                working_dir.display()
+            ))
+        }
+    }
+    fs::create_dir_all(&private_config.storage_path).wrap_err(format!(
+        "Failed to create directory '{}'",
+        working_dir.display()
+    ))?;
 
     let validator = Validator::start(
         authority,

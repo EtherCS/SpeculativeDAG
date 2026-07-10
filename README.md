@@ -57,6 +57,37 @@ Arguments:
 9. experiment mode
 10. workload (`erc20`, `weth`, or `uniswap`)
 
+### Consecutive Commit-Stall Attack
+
+Run a deterministic interval in which every direct leader decision is held as undecided while
+normal DAG construction continues:
+
+```bash
+SKIP_BUILD=1 bash scripts/attackrun.sh 90 7 10 60 100 full erc20
+```
+
+Arguments:
+
+1. total run duration
+2. committee size
+3. stall start time in seconds
+4. stall end time in seconds
+5. client load
+6. experiment mode
+7. workload (`erc20`, `weth`, or `uniswap`)
+8. optional output directory
+
+The run duration must be greater than the stall end time so the experiment captures catch-up after
+the attack. Results are written to
+`./results/attack-<mode>-<workload>-<committee-size>-<timestamp>/` by default.
+
+This mode emulates certificate withholding at the consensus decision boundary. Blocks continue to
+be disseminated normally, so each leader can retain the next-round quorum references used by APS
+and replicas continue creating blocks across consecutive rounds. During `[stall_start, stall_end)`,
+the direct commit rule returns `Undecided`; after `stall_end`, normal direct and indirect decisions
+resume over the accumulated DAG. It is a deterministic fault-injection experiment, not a
+packet-level Byzantine network scheduler.
+
 ## Experiment Modes
 
 Both `speculative.sh` and `jitterrun.sh` accept an optional experiment mode, workload, and output directory:

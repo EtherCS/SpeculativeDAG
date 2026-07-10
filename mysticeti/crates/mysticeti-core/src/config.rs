@@ -70,6 +70,8 @@ pub struct NodeParameters {
     pub initial_score: i128,
     #[serde(default = "node_defaults::default_network_jitter_simulation")]
     pub network_jitter_simulation: Option<NetworkJitterSimulation>,
+    #[serde(default = "node_defaults::default_direct_commit_stall_simulation")]
+    pub direct_commit_stall_simulation: Option<DirectCommitStallSimulation>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +165,10 @@ pub mod node_defaults {
         // super::NetworkJitterSimulation::default()
         None
     }
+
+    pub fn default_direct_commit_stall_simulation() -> Option<super::DirectCommitStallSimulation> {
+        None
+    }
 }
 
 impl Default for NodeParameters {
@@ -188,6 +194,7 @@ impl Default for NodeParameters {
                 node_defaults::default_reputation_threshold_denominator(),
             initial_score: node_defaults::default_initial_score(),
             network_jitter_simulation: node_defaults::default_network_jitter_simulation(),
+            direct_commit_stall_simulation: node_defaults::default_direct_commit_stall_simulation(),
         }
     }
 }
@@ -515,6 +522,25 @@ impl Default for NetworkJitterSimulation {
             network_jitter: network_jitter_defaults::default_network_jitter(),
             start_time: network_jitter_defaults::default_start_time(),
             jitter_duration: network_jitter_defaults::default_jitter_duration(),
+        }
+    }
+}
+
+/// Emulates withholding enough certificates to prevent direct leader decisions while
+/// leaving block dissemination and APS prediction inputs available.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DirectCommitStallSimulation {
+    /// Delay after validator startup before direct decisions are suppressed.
+    pub start_time: Duration,
+    /// Length of the direct-decision suppression window.
+    pub duration: Duration,
+}
+
+impl DirectCommitStallSimulation {
+    pub fn new(start_time: Duration, duration: Duration) -> Self {
+        Self {
+            start_time,
+            duration,
         }
     }
 }

@@ -1,12 +1,13 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, sync::Arc, time::Instant};
 
 use super::{base_committer::BaseCommitter, LeaderStatus, DEFAULT_WAVE_LENGTH};
 use crate::{
     block_store::BlockStore,
     committee::Committee,
+    config::DirectCommitStallSimulation,
     consensus::base_committer::BaseCommitterOptions,
     metrics::Metrics,
     types::{AuthorityIndex, BlockReference, RoundNumber},
@@ -120,6 +121,8 @@ pub struct UniversalCommitterBuilder {
     wave_length: RoundNumber,
     number_of_leaders: usize,
     pipeline: bool,
+    direct_commit_stall: Option<DirectCommitStallSimulation>,
+    validator_start: Instant,
 }
 
 impl UniversalCommitterBuilder {
@@ -131,6 +134,8 @@ impl UniversalCommitterBuilder {
             wave_length: DEFAULT_WAVE_LENGTH,
             number_of_leaders: 1,
             pipeline: false,
+            direct_commit_stall: None,
+            validator_start: Instant::now(),
         }
     }
 
@@ -149,6 +154,14 @@ impl UniversalCommitterBuilder {
         self
     }
 
+    pub fn with_direct_commit_stall(
+        mut self,
+        simulation: Option<DirectCommitStallSimulation>,
+    ) -> Self {
+        self.direct_commit_stall = simulation;
+        self
+    }
+
     pub fn build(self) -> UniversalCommitter {
         let mut committers = Vec::new();
         let pipeline_stages = if self.pipeline { self.wave_length } else { 1 };
@@ -161,7 +174,11 @@ impl UniversalCommitterBuilder {
                 };
                 let committer =
                     BaseCommitter::new(self.committee.clone(), self.block_store.clone())
-                        .with_options(options);
+                        .with_options(options)
+                        .with_direct_commit_stall(
+                            self.direct_commit_stall.clone(),
+                            self.validator_start,
+                        );
                 committers.push(committer);
             }
         }

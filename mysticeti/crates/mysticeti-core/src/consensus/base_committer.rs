@@ -1,12 +1,13 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fmt::Display, sync::Arc};
+use std::{fmt::Display, sync::Arc, time::Instant};
 
 use super::{LeaderStatus, DEFAULT_WAVE_LENGTH};
 use crate::{
     block_store::BlockStore,
     committee::{Committee, QuorumThreshold, StakeAggregator},
+    config::DirectCommitStallSimulation,
     consensus::MINIMUM_WAVE_LENGTH,
     data::Data,
     types::{format_authority_round, AuthorityIndex, BlockReference, RoundNumber, StatementBlock},
@@ -47,6 +48,8 @@ pub struct BaseCommitter {
     block_store: BlockStore,
     /// The options used by this committer
     options: BaseCommitterOptions,
+    /// Optional fault injection that suppresses direct decisions for a wall-clock interval.
+    direct_commit_stall: Option<(DirectCommitStallSimulation, Instant)>,
 }
 
 impl BaseCommitter {
@@ -55,6 +58,7 @@ impl BaseCommitter {
             committee,
             block_store,
             options: BaseCommitterOptions::default(),
+            direct_commit_stall: None,
         }
     }
 
@@ -62,6 +66,24 @@ impl BaseCommitter {
         assert!(options.wave_length >= MINIMUM_WAVE_LENGTH);
         self.options = options;
         self
+    }
+
+    pub fn with_direct_commit_stall(
+        mut self,
+        simulation: Option<DirectCommitStallSimulation>,
+        validator_start: Instant,
+    ) -> Self {
+        self.direct_commit_stall = simulation.map(|simulation| (simulation, validator_start));
+        self
+    }
+
+    fn direct_commit_stall_active(&self) -> bool {
+        let Some((simulation, validator_start)) = &self.direct_commit_stall else {
+            return false;
+        };
+        let elapsed = validator_start.elapsed();
+        elapsed >= simulation.start_time
+            && elapsed < simulation.start_time.saturating_add(simulation.duration)
     }
 
     /// Return the wave in which the specified round belongs.
@@ -319,6 +341,10 @@ impl BaseCommitter {
         leader: AuthorityIndex,
         leader_round: RoundNumber,
     ) -> LeaderStatus {
+        if self.direct_commit_stall_active() {
+            return LeaderStatus::Undecided(leader, leader_round);
+        }
+
         // Check whether the leader has enough blame. That is, whether there are 2f+1 non-votes
         // for that leader (which ensure there will never be a certificate for that leader).
         let voting_round = leader_round + 1;
