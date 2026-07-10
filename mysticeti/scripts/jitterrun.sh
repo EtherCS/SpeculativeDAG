@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CALLER_PWD="$(pwd)"
 BIN_PATH="${PROJECT_ROOT}/target/debug/mysticeti"
+source "${SCRIPT_DIR}/validator_lifecycle.sh"
 
 DURATION=${1:-90}
 COMMITTEE_SIZE=${2:-7}
@@ -35,14 +36,15 @@ fi
 export RUST_LOG=warn,mysticeti_core::consensus=debug,mysticeti_core::net_sync=DEBUG,mysticeti_core::core=DEBUG,mysticeti_core::validator=DEBUG,mysticeti_core::transactions_generator=INFO,mysticeti_core::executor=INFO,pevm=INFO,mysticeti_core::speculative_executor=DEBUG,mysticeti_core::block_handler=INFO,
 
 mkdir -p "${OUTPUT_DIR}"
-tmux kill-server || true
+tmux kill-server 2>/dev/null || true
+stop_stale_validators
 
 cleanup() {
     if [[ -n "${RESOURCE_MONITOR_PID}" ]]; then
         kill "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
         wait "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
     fi
-    tmux kill-server || true
+    stop_registered_validators
 }
 trap cleanup EXIT
 
@@ -50,7 +52,9 @@ echo "Starting validators in mode=${EXPERIMENT_MODE} workload=${WORKLOAD} with n
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
     tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && exec ${BIN_PATH} jitter-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --fault-num ${FAULT_NUM} --delay-connection-num ${DELAY_CONNECTION_NUM} --jitter-ms ${JITTER_MS} --start-time ${JITTER_START_TIME} --duration-secs ${JITTER_DURATION} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
-    tmux display-message -p -t "v${i}:0.0" '#{pane_pid}' > "${OUTPUT_DIR}/validator-${i}.pid"
+    validator_pid=$(tmux display-message -p -t "v${i}:0.0" '#{pane_pid}')
+    printf '%s\n' "${validator_pid}" > "${OUTPUT_DIR}/validator-${i}.pid"
+    register_validator_pid "${validator_pid}"
 done
 
 bash "${SCRIPT_DIR}/monitor_resources.sh" \

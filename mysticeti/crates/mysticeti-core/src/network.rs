@@ -87,9 +87,20 @@ impl Network {
                 addresses.len()
             );
         }
-        let server = TcpListener::bind(local_addr)
-            .await
+        let socket = if local_addr.is_ipv4() {
+            TcpSocket::new_v4().expect("Failed to create IPv4 listener socket")
+        } else {
+            TcpSocket::new_v6().expect("Failed to create IPv6 listener socket")
+        };
+        socket
+            .set_reuseaddr(true)
+            .expect("Failed to enable address reuse on local socket");
+        socket
+            .bind(local_addr)
             .expect("Failed to bind to local socket");
+        let server = socket
+            .listen(1024)
+            .expect("Failed to listen on local socket");
         let mut worker_senders: HashMap<SocketAddr, mpsc::UnboundedSender<TcpStream>> =
             HashMap::default();
         let handle = Handle::current();

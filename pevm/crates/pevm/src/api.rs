@@ -548,7 +548,10 @@ impl PevmTransactionGenerator {
         }
 
         loop {
-            let txn_needed = self.insufficient_txn_signal_receiver.recv().await.unwrap();
+            let Some(txn_needed) = self.insufficient_txn_signal_receiver.recv().await else {
+                tracing::info!("Stopping PEVM transaction generation: request channel closed");
+                break;
+            };
             // tracing::debug!("txn_needed = {}", txn_needed);
             let batch_to_schedule: Vec<(String, Address)> =
                 new_transactions.drain(..txn_needed).collect();

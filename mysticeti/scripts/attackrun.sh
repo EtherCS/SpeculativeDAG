@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CALLER_PWD="$(pwd)"
 BIN_PATH="${PROJECT_ROOT}/target/debug/mysticeti"
+source "${SCRIPT_DIR}/validator_lifecycle.sh"
 
 DURATION=${1:-90}
 COMMITTEE_SIZE=${2:-7}
@@ -40,14 +41,15 @@ fi
 export RUST_LOG=warn,mysticeti_core::consensus=debug,mysticeti_core::core=debug,mysticeti_core::speculative_executor=debug,mysticeti_core::executor=info,pevm=info
 
 mkdir -p "${OUTPUT_DIR}"
-tmux kill-server || true
+tmux kill-server 2>/dev/null || true
+stop_stale_validators
 
 cleanup() {
     if [[ -n "${RESOURCE_MONITOR_PID}" ]]; then
         kill "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
         wait "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
     fi
-    tmux kill-server || true
+    stop_registered_validators
 }
 trap cleanup EXIT
 
@@ -55,7 +57,9 @@ echo "Starting attack run in mode=${EXPERIMENT_MODE} workload=${WORKLOAD} stall=
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
     tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && exec ${BIN_PATH} attack-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --stall-start ${STALL_START} --stall-end ${STALL_END} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
-    tmux display-message -p -t "v${i}:0.0" '#{pane_pid}' > "${OUTPUT_DIR}/validator-${i}.pid"
+    validator_pid=$(tmux display-message -p -t "v${i}:0.0" '#{pane_pid}')
+    printf '%s\n' "${validator_pid}" > "${OUTPUT_DIR}/validator-${i}.pid"
+    register_validator_pid "${validator_pid}"
 done
 
 bash "${SCRIPT_DIR}/monitor_resources.sh" \
