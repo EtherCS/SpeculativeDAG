@@ -10,6 +10,7 @@ LOAD=${LOAD:-100}
 TOTAL_DURATION=${TOTAL_DURATION:-300}
 STALL_START=${STALL_START:-1}
 STALL_END=${STALL_END:-250}
+RESOURCE_MONITOR_INTERVAL=${RESOURCE_MONITOR_INTERVAL:-1}
 COMMITTEE_SIZES=(${COMMITTEE_SIZES:-10 30})
 MODES=(${MODES:-full no-snapshots eager-snapshots eac})
 
@@ -39,7 +40,7 @@ for run_id in $(seq 1 "${REPEAT}"); do
             mkdir -p "${speculative_root}"
 
             echo "Running snapshot ablation (speculative): repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size}"
-            bash "${SCRIPT_DIR}/speculative.sh" \
+            RESOURCE_MONITOR_INTERVAL="${RESOURCE_MONITOR_INTERVAL}" bash "${SCRIPT_DIR}/speculative.sh" \
                 "${committee_size}" \
                 "${TOTAL_DURATION}" \
                 "${LOAD}" \
@@ -52,7 +53,7 @@ for run_id in $(seq 1 "${REPEAT}"); do
             mkdir -p "${attack_root}"
 
             echo "Running snapshot ablation (attack): repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size} stall=[${STALL_START},${STALL_END})"
-            bash "${SCRIPT_DIR}/attackrun.sh" \
+            RESOURCE_MONITOR_INTERVAL="${RESOURCE_MONITOR_INTERVAL}" bash "${SCRIPT_DIR}/attackrun.sh" \
                 "${TOTAL_DURATION}" \
                 "${committee_size}" \
                 "${STALL_START}" \

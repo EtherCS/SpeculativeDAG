@@ -19,6 +19,8 @@ EXPERIMENT_MODE=${9:-full}
 WORKLOAD=${10:-erc20}
 OUTPUT_DIR=${11:-"./results/jitter-${EXPERIMENT_MODE}-${WORKLOAD}-$(date +%Y%m%d-%H%M%S)"}
 SKIP_BUILD=${SKIP_BUILD:-0}
+RESOURCE_MONITOR_INTERVAL=${RESOURCE_MONITOR_INTERVAL:-1}
+RESOURCE_MONITOR_PID=""
 
 if [[ "${OUTPUT_DIR}" != /* ]]; then
     OUTPUT_DIR="${CALLER_PWD}/${OUTPUT_DIR}"
@@ -36,6 +38,10 @@ mkdir -p "${OUTPUT_DIR}"
 tmux kill-server || true
 
 cleanup() {
+    if [[ -n "${RESOURCE_MONITOR_PID}" ]]; then
+        kill "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
+        wait "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
+    fi
     tmux kill-server || true
 }
 trap cleanup EXIT
@@ -43,10 +49,19 @@ trap cleanup EXIT
 echo "Starting validators in mode=${EXPERIMENT_MODE} workload=${WORKLOAD} with network jitter..."
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
-    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && ${BIN_PATH} jitter-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --fault-num ${FAULT_NUM} --delay-connection-num ${DELAY_CONNECTION_NUM} --jitter-ms ${JITTER_MS} --start-time ${JITTER_START_TIME} --duration-secs ${JITTER_DURATION} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
+    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && exec ${BIN_PATH} jitter-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --fault-num ${FAULT_NUM} --delay-connection-num ${DELAY_CONNECTION_NUM} --jitter-ms ${JITTER_MS} --start-time ${JITTER_START_TIME} --duration-secs ${JITTER_DURATION} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
+    tmux display-message -p -t "v${i}:0.0" '#{pane_pid}' > "${OUTPUT_DIR}/validator-${i}.pid"
 done
 
+bash "${SCRIPT_DIR}/monitor_resources.sh" \
+    "${OUTPUT_DIR}" "${COMMITTEE_SIZE}" "${RESOURCE_MONITOR_INTERVAL}" &
+RESOURCE_MONITOR_PID=$!
+
 sleep "${DURATION}"
+
+kill "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
+wait "${RESOURCE_MONITOR_PID}" 2>/dev/null || true
+RESOURCE_MONITOR_PID=""
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
     curl -s "http://0.0.0.0:$((1500 + COMMITTEE_SIZE + i))/metrics" > "${OUTPUT_DIR}/validator-${i}.metrics"
@@ -64,6 +79,7 @@ jitter_duration=${JITTER_DURATION}
 load=${LOAD}
 experiment_mode=${EXPERIMENT_MODE}
 workload=${WORKLOAD}
+resource_monitor_interval=${RESOURCE_MONITOR_INTERVAL}
 EOF
 
 if [ -f "${SCRIPT_DIR}/summarize_metrics.py" ]; then
