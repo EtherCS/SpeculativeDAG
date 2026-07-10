@@ -27,12 +27,25 @@ for run_id in $(seq 1 "${REPEAT}"); do
     timestamp="$(date +%Y%m%d-%H%M%S)"
     for mode in "${MODES[@]}"; do
         for committee_size in "${COMMITTEE_SIZES[@]}"; do
+            speculative_root=$(resolve_output_dir "./results/ablation-aps/speculative/${mode}-${committee_size}-${timestamp}")
+            mkdir -p "${speculative_root}"
+
+            echo "Running APS ablation (speculative): repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size}"
+            bash "${SCRIPT_DIR}/speculative.sh" \
+                "${committee_size}" \
+                "${TOTAL_DURATION}" \
+                "${LOAD}" \
+                "${mode}" \
+                "${WORKLOAD}" \
+                "${speculative_root}"
+            sleep 1
+
             fault_counts=( $((committee_size * 30 / 100)) $((committee_size * 50 / 100)) )
             for fault_num in "${fault_counts[@]}"; do
-                root_dir=$(resolve_output_dir "./results/ablation-aps-${mode}-${committee_size}-${fault_num}-${timestamp}")
-                mkdir -p "${root_dir}"
+                jitter_dir=$(resolve_output_dir "./results/ablation-aps/jitter/${mode}-${committee_size}-${fault_num}-${timestamp}")
+                mkdir -p "${jitter_dir}"
 
-                echo "Running APS ablation: repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size} fault_num=${fault_num}"
+                echo "Running APS ablation (jitter): repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size} fault_num=${fault_num}"
                 bash "${SCRIPT_DIR}/jitterrun.sh" \
                     "${TOTAL_DURATION}" \
                     "${committee_size}" \
@@ -44,7 +57,7 @@ for run_id in $(seq 1 "${REPEAT}"); do
                     "${LOAD}" \
                     "${mode}" \
                     "${WORKLOAD}" \
-                    "${root_dir}"
+                    "${jitter_dir}"
                 sleep 1
             done
         done

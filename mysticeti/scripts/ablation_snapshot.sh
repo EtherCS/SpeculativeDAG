@@ -27,7 +27,7 @@ for run_id in $(seq 1 "${REPEAT}"); do
     timestamp="$(date +%Y%m%d-%H%M%S)"
     for mode in "${MODES[@]}"; do
         for committee_size in "${COMMITTEE_SIZES[@]}"; do
-            speculative_root=$(resolve_output_dir "./results/ablation-snapshot-speculative-${mode}-${committee_size}-${timestamp}")
+            speculative_root=$(resolve_output_dir "./results/ablation-snapshot/speculative/${mode}-${committee_size}-${timestamp}")
             mkdir -p "${speculative_root}"
 
             echo "Running snapshot ablation (speculative): repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size}"
@@ -41,7 +41,7 @@ for run_id in $(seq 1 "${REPEAT}"); do
             sleep 1
 
             fault_num=$((committee_size * 50 / 100))
-            jitter_root=$(resolve_output_dir "./results/ablation-snapshot-jitter-${mode}-${committee_size}-${fault_num}-${timestamp}")
+            jitter_root=$(resolve_output_dir "./results/ablation-snapshot/jitter/${mode}-${committee_size}-${fault_num}-${timestamp}")
             mkdir -p "${jitter_root}"
 
             echo "Running snapshot ablation (jitter): repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size} fault_num=${fault_num}"
