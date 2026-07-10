@@ -36,6 +36,7 @@ enum ExperimentMode {
     NoAps,
     NoSnapshots,
     EagerSnapshots,
+    AllSkip,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -515,5 +516,9 @@ fn apply_experiment_mode(
             .with_speculative_execution(true)
             .with_speculation_prediction_policy(SpeculationPredictionPolicy::Adaptive)
             .with_snapshot_policy(SpeculationSnapshotPolicy::Eager),
+        ExperimentMode::AllSkip => node_parameters
+            .with_speculative_execution(true)
+            .with_speculation_prediction_policy(SpeculationPredictionPolicy::AllSkip)
+            .with_snapshot_policy(SpeculationSnapshotPolicy::Adaptive),
     }
 }

@@ -432,6 +432,7 @@ impl<H: BlockHandler> Core<H> {
             let leader_status = match self.speculation_prediction_policy {
                 SpeculationPredictionPolicy::Adaptive => self.committer.predict_leader_status(r),
                 SpeculationPredictionPolicy::AllCommit => self.predict_all_commit_leader_status(r),
+                SpeculationPredictionPolicy::AllSkip => self.predict_all_skip_leader_status(r),
             };
             let leader_prediction = match leader_status {
                 LeaderStatus::Commit(leader_block) => LeaderPrediction::new(
@@ -465,6 +466,13 @@ impl<H: BlockHandler> Core<H> {
             if let Some(block) = leader_blocks.first() {
                 return LeaderStatus::Commit(block.clone());
             }
+            return LeaderStatus::Skip(leader, round);
+        }
+        LeaderStatus::Undecided(0, round)
+    }
+
+    fn predict_all_skip_leader_status(&self, round: RoundNumber) -> LeaderStatus {
+        for leader in self.committer.get_leaders(round) {
             return LeaderStatus::Skip(leader, round);
         }
         LeaderStatus::Undecided(0, round)

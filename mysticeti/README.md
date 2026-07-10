@@ -9,3 +9,25 @@ The code in this branch is a prototype of Mysticeti. It supplements the paper [M
 ## License
 
 This software is licensed as [Apache 2.0](LICENSE).
+
+
+## Evaluation Modes
+
+The prototype exposes several experiment modes through `--experiment-mode`:
+
+- `full`: adaptive prediction + adaptive snapshots.
+- `eac`: execution-after-consensus baseline (speculative execution disabled).
+- `no-aps`: speculate with the `AllCommit` prediction policy.
+- `all-skip`: speculate with the `AllSkip` prediction policy, i.e. every undecided leader is predicted as skipped.
+- `no-snapshots`: adaptive prediction with snapshots disabled.
+- `eager-snapshots`: adaptive prediction with eager snapshotting.
+
+Example commands:
+
+```bash
+bash scripts/speculative.sh 4 15 100 full erc20
+bash scripts/speculative.sh 4 15 100 all-skip erc20
+bash scripts/jitterrun.sh 90 7 4 4 2500 10 90 100 all-skip erc20
+```
+
+The default ablation sweep in `scripts/ablation_study.sh` now includes `all-skip` in addition to the existing modes.

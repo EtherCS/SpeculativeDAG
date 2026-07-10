@@ -5,6 +5,7 @@ import glob
 import os
 import re
 import sys
+from collections import defaultdict
 
 
 LINE_RE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{([^}]*)\})?\s+([0-9eE+.\-]+)$')
@@ -64,8 +65,11 @@ def main():
         "speculative_prefix_matched_leaders_total",
         "speculative_reexecuted_leaders_total",
         "speculative_snapshot_window_size",
+        "speculative_snapshot_non_window_peak_size",
         "speculative_snapshot_store_size",
     }
+
+    aggregates = defaultdict(list)
 
     for metric_file in metric_files:
         validator = os.path.splitext(os.path.basename(metric_file))[0]
@@ -74,6 +78,12 @@ def main():
                 continue
             label_str = ";".join(f"{k}={labels[k]}" for k in sorted(labels))
             writer.writerow([run_name, validator, name, label_str, value])
+            aggregates[(name, label_str)].append(value)
+
+    for (name, label_str) in sorted(aggregates):
+        values = aggregates[(name, label_str)]
+        avg_value = sum(values) / len(values)
+        writer.writerow([run_name, "average", name, label_str, avg_value])
 
 
 if __name__ == "__main__":

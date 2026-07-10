@@ -76,6 +76,7 @@ pub struct NodeParameters {
 pub enum SpeculationPredictionPolicy {
     Adaptive,
     AllCommit,
+    AllSkip,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +144,7 @@ pub mod node_defaults {
     }
 
     pub fn default_reputation_threshold_deviation() -> u64 {
-        80
+        0
     }
 
     pub fn default_reputation_threshold_numerator() -> u64 {

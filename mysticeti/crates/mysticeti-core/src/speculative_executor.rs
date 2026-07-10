@@ -618,12 +618,15 @@ impl SpeculativeExecutor {
     }
 
     fn update_snapshot_gauges(&self) {
+        let window_size = self.snapshot_window.len() as i64;
+        let store_size = self.snapshots.len() as i64;
+
         self.metrics
             .speculative_snapshot_window_size
-            .set(self.snapshot_window.len() as i64);
+            .set(self.metrics.speculative_snapshot_window_size.get().max(window_size));
         self.metrics
             .speculative_snapshot_store_size
-            .set(self.snapshots.len() as i64);
+            .set(self.metrics.speculative_snapshot_store_size.get().max(store_size));
     }
 }
 

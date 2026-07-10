@@ -8,7 +8,7 @@ CALLER_PWD="$(pwd)"
 EXPERIMENT_KIND=${1:-jitter}
 ROOT_DIR=${2:-"./results/ablation-$(date +%Y%m%d-%H%M%S)"}
 WORKLOAD=${3:-erc20}
-MODES=${MODES:-"full eac no-aps no-snapshots eager-snapshots"}
+MODES=${MODES:-"full eac no-aps all-skip no-snapshots eager-snapshots"}
 
 if [[ "${ROOT_DIR}" != /* ]]; then
     ROOT_DIR="${CALLER_PWD}/${ROOT_DIR}"
