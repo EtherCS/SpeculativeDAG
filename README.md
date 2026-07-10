@@ -31,10 +31,10 @@ To avoid rebuilding the binary before every run, build once with `cargo build` a
 Run a short local committee without network jitter:
 
 ```bash
-SKIP_BUILD=1 bash speculative.sh 4 60 full erc20
+SKIP_BUILD=1 bash speculative.sh 4 60 100 full erc20
 ```
 
-This runs 4 validators for 60 seconds on the `erc20` workload and writes results to `./results/speculative-<mode>-<workload>-<timestamp>/`.
+This runs 4 validators for 60 seconds with input 100 tx/s on the `erc20` workload and writes results to `./results/speculative-<mode>-<workload>-<timestamp>/`.
 
 ### Jitter Run
 
@@ -62,7 +62,7 @@ Arguments:
 Both `speculative.sh` and `jitterrun.sh` accept an optional experiment mode, workload, and output directory:
 
 ```bash
-SKIP_BUILD=1 bash speculative.sh 4 60 full uniswap ./results/full-dryrun
+SKIP_BUILD=1 bash speculative.sh 4 60 100 full uniswap ./results/full-dryrun
 SKIP_BUILD=1 bash jitterrun.sh 90 7 1 4 2500 10 50 100 full weth ./results/full-jitter
 ```
 

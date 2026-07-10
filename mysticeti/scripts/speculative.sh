@@ -9,9 +9,10 @@ BIN_PATH="${PROJECT_ROOT}/target/debug/mysticeti"
 
 COMMITTEE_SIZE=${1:-4}
 DURATION=${2:-15}
-EXPERIMENT_MODE=${3:-full}
-WORKLOAD=${4:-erc20}
-OUTPUT_DIR=${5:-"./results/speculative-${EXPERIMENT_MODE}-${WORKLOAD}-$(date +%Y%m%d-%H%M%S)"}
+LOAD=${3:-100}
+EXPERIMENT_MODE=${4:-full}
+WORKLOAD=${5:-erc20}
+OUTPUT_DIR=${6:-"./results/speculative-${EXPERIMENT_MODE}-${WORKLOAD}-$(date +%Y%m%d-%H%M%S)"}
 SKIP_BUILD=${SKIP_BUILD:-0}
 
 if [[ "${OUTPUT_DIR}" != /* ]]; then
@@ -37,7 +38,7 @@ trap cleanup EXIT
 echo "Starting validators in mode=${EXPERIMENT_MODE} workload=${WORKLOAD}..."
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
-    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && ${BIN_PATH} dry-run --committee-size ${COMMITTEE_SIZE} --authority ${i} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
+    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && ${BIN_PATH} dry-run --committee-size ${COMMITTEE_SIZE} --authority ${i} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
 done
 
 sleep "${DURATION}"
@@ -50,6 +51,7 @@ cat > "${OUTPUT_DIR}/run-meta.txt" <<EOF
 experiment=speculative
 committee_size=${COMMITTEE_SIZE}
 duration=${DURATION}
+load=${LOAD}
 experiment_mode=${EXPERIMENT_MODE}
 workload=${WORKLOAD}
 EOF

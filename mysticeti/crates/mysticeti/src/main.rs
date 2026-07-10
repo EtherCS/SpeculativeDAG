@@ -92,6 +92,9 @@ enum Operation {
         /// The number of authorities in the committee.
         #[clap(long, value_name = "INT")]
         committee_size: usize,
+        /// The transaction load
+        #[clap(long, value_name = "INT")]
+        load: usize,
         /// Experiment mode used for ablation studies.
         #[clap(long, value_enum, default_value_t = ExperimentMode::Full)]
         experiment_mode: ExperimentMode,
@@ -177,9 +180,10 @@ async fn main() -> Result<()> {
         Operation::DryRun {
             authority,
             committee_size,
+            load,
             experiment_mode,
             workload,
-        } => dryrun(authority, committee_size, experiment_mode, workload).await?,
+        } => dryrun(authority, committee_size, load, experiment_mode, workload).await?,
         Operation::JitterRun {
             authority,
             committee_size,
@@ -332,6 +336,7 @@ async fn run(
 async fn dryrun(
     authority: AuthorityIndex,
     committee_size: usize,
+    load: usize,
     experiment_mode: ExperimentMode,
     workload: WorkloadPreset,
 ) -> Result<()> {
@@ -341,7 +346,7 @@ async fn dryrun(
     );
     let ips = vec![IpAddr::V4(Ipv4Addr::LOCALHOST); committee_size];
     let committee = Committee::new_for_benchmarks(committee_size);
-    let client_parameters = ClientParameters::default();
+    let client_parameters = ClientParameters::default().with_load(load);
     let (workload_type, account_storage_path, account_addresses_path) =
         benchmark_workload(workload);
     let node_parameters = apply_experiment_mode(

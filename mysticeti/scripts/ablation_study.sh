@@ -22,6 +22,7 @@ for mode in ${MODES}; do
         bash "${SCRIPT_DIR}/speculative.sh" \
             "${COMMITTEE_SIZE:-4}" \
             "${DURATION:-60}" \
+            "${LOAD:-100}" \
             "${mode}" \
             "${WORKLOAD}" \
             "${out_dir}"
