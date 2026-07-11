@@ -5,7 +5,7 @@ use ethers::types::Address;
 use log::{debug, info, warn};
 use pevm::api::{
     ensure_workload_artifacts, remove_invalid_workload_artifacts, ExecutionMode as PevmExecutionMode,
-    PevmExecutor, TransactionWithHint, WorkloadType,
+    EvmStateWriteSet, PevmExecutor, TransactionWithHint, WorkloadType,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -107,6 +107,9 @@ pub(crate) struct ExecutionService {
     store: Store,
     rx_execution: Receiver<ExecutionRequest>,
     committed_executor: PevmExecutor,
+    // Header id -> (committed-state version used as the speculative base, write set).
+    speculative_results: HashMap<Digest, (u64, EvmStateWriteSet)>,
+    committed_state_version: u64,
     pending_committed_headers: HashMap<PublicKey, BTreeMap<u64, Header>>,
     next_committed_height: HashMap<PublicKey, u64>,
 }
@@ -151,6 +154,8 @@ impl ExecutionService {
                 store,
                 rx_execution,
                 committed_executor,
+                speculative_results: HashMap::new(),
+                committed_state_version: 0,
                 pending_committed_headers: HashMap::new(),
                 next_committed_height: HashMap::new(),
             }
@@ -198,11 +203,14 @@ impl ExecutionService {
                 break;
             };
 
-            if let Err(error) = self.execute_committed_header(&next_header).await {
-                warn!(
-                    "Committed EVM execution failed for header {} at height {}: {}",
-                    next_header.id, next_header.height, error
-                );
+            match self.execute_committed_header(&next_header).await {
+                Ok(()) => self.advance_committed_state(),
+                Err(error) => {
+                    warn!(
+                        "Committed EVM execution failed for header {} at height {}: {}",
+                        next_header.id, next_header.height, error
+                    );
+                }
             }
 
             self.next_committed_height.insert(author, expected + 1);
@@ -210,6 +218,25 @@ impl ExecutionService {
     }
 
     async fn execute_committed_header(&mut self, header: &Header) -> Result<()> {
+        if let Some((base_version, write_set)) = self.speculative_results.remove(&header.id) {
+            if base_version == self.committed_state_version {
+                info!(
+                    "Committing speculative result for header {} without re-execution",
+                    header.id
+                );
+                self.committed_executor
+                    .commit_speculative_execution(write_set);
+                return Ok(());
+            }
+
+            debug!(
+                "Discarding stale speculative result for header {} (base version {}, current version {})",
+                header.id,
+                base_version,
+                self.committed_state_version
+            );
+        }
+
         let txs = self.load_header_transactions(header).await?;
         if txs.is_empty() {
             return Ok(());
@@ -224,24 +251,27 @@ impl ExecutionService {
         Ok(())
     }
 
+    fn advance_committed_state(&mut self) {
+        self.committed_state_version += 1;
+        let committed_state_version = self.committed_state_version;
+        self.speculative_results
+            .retain(|_, (base_version, _)| *base_version >= committed_state_version);
+    }
+
     async fn execute_speculative_header(&mut self, header: &Header) -> Result<()> {
         let txs = self.load_header_transactions(header).await?;
-        if txs.is_empty() {
-            return Ok(());
-        }
 
-        let mut speculative_executor = PevmExecutor::new(
-            self.config.executor_mode.clone(),
-            self.config.workload.clone(),
-            self.config.account_storage_path.clone(),
-        );
-        speculative_executor.storage = self.committed_executor.storage.clone();
+        let mut speculative_executor = self.committed_executor.clone();
         debug!(
             "Speculatively executing header {} with {} EVM transactions",
             header.id,
             txs.len()
         );
-        speculative_executor.execute_checked(txs)?;
+        let write_set = speculative_executor.speculative_execute(txs, EvmStateWriteSet::default());
+        self.speculative_results.insert(
+            header.id.clone(),
+            (self.committed_state_version, write_set),
+        );
         Ok(())
     }
 
