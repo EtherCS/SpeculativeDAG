@@ -157,3 +157,24 @@ The parser measures end-to-end latency using sampled transactions that are logge
 - `fab local` suppresses compiler warnings during the build step to keep benchmark output readable.
 - If you want to inspect raw process output while a benchmark is running, use `tmux ls` and open the corresponding session.
 - `jitterrun.sh` stores a human-readable summary in `results/.../summary.txt` and symlinks the matching raw logs directory into `results/.../logs`.
+
+## Evaluation Matrices
+
+Run the local ordered/speculative matrix from this directory:
+
+```bash
+bash run_local_matrix.sh
+```
+
+Run the corresponding consecutive order-stall attack matrix:
+
+```bash
+bash run_attack_matrix.sh
+```
+
+Each script evaluates both execution modes, all three workloads (`erc20`, `weth`, and `uniswap`),
+rates `400` and `4000`, and committee sizes `4` and `10`, with `runs=2`. The attack matrix uses
+`order_stall_start=1000` and `order_stall_duration=40000`; other Fabric defaults are unchanged.
+
+Each matrix writes all Fabric output, including `print(ret.result())`, to one timestamped log file.
+Set `LOG_FILE=/path/to/output.log` to choose a different file.
