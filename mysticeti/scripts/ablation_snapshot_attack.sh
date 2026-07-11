@@ -10,6 +10,9 @@ LOAD=${LOAD:-100}
 TOTAL_DURATION=${TOTAL_DURATION:-120}
 STALL_START=${STALL_START:-1}
 STALL_END=${STALL_END:-90}
+JITTER_MS=${JITTER_MS:-1500}
+JITTER_START_TIME=${JITTER_START_TIME:-1}
+JITTER_DURATION=${JITTER_DURATION:-90}
 RESOURCE_MONITOR_INTERVAL=${RESOURCE_MONITOR_INTERVAL:-1}
 COMMITTEE_SIZES=(${COMMITTEE_SIZES:-10 30})
 MODES=(${MODES:-full no-snapshots eager-snapshots eac})
@@ -62,6 +65,25 @@ for run_id in $(seq 1 "${REPEAT}"); do
                 "${mode}" \
                 "${WORKLOAD}" \
                 "${attack_root}"
+            sleep 1
+
+            fault_num=$((committee_size * 50 / 100))
+            jitter_root=$(resolve_output_dir "./results/ablation-snapshot-attack/jitter/${mode}-${committee_size}-${fault_num}-${timestamp}")
+            mkdir -p "${jitter_root}"
+
+            echo "Running snapshot ablation (jitter): repeat=${run_id}/${REPEAT} mode=${mode} committee_size=${committee_size} fault_num=${fault_num}"
+            RESOURCE_MONITOR_INTERVAL="${RESOURCE_MONITOR_INTERVAL}" bash "${SCRIPT_DIR}/jitterrun.sh" \
+                "${TOTAL_DURATION}" \
+                "${committee_size}" \
+                "${fault_num}" \
+                "${fault_num}" \
+                "${JITTER_MS}" \
+                "${JITTER_START_TIME}" \
+                "${JITTER_DURATION}" \
+                "${LOAD}" \
+                "${mode}" \
+                "${WORKLOAD}" \
+                "${jitter_root}"
             sleep 1
         done
     done

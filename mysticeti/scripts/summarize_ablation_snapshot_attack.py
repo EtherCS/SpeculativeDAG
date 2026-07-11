@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize repeated snapshot-policy attack-ablation results."""
+"""Summarize repeated snapshot-policy speculative, jitter, and attack results."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def load_run(directory: Path) -> RunMetrics | None:
 
 def summarize(root: Path) -> dict[str, list[RunMetrics]]:
     repeated: dict[str, list[RunMetrics]] = defaultdict(list)
-    for kind in ("speculative", "attack"):
+    for kind in ("speculative", "jitter", "attack"):
         kind_root = root / kind
         if not kind_root.is_dir():
             continue
