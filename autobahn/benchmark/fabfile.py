@@ -41,7 +41,9 @@ def _make_bench_params(workload='erc20', artifacts='.', num_clusters=5,
 def _make_node_params(execution='none', workload='erc20', executor='sequential',
                       artifacts='.', num_clusters=5, families_per_cluster=5,
                       people_per_family=8, simulate_asynchrony=False,
-                      asynchrony_start=15_000, asynchrony_duration=3_000):
+                      asynchrony_start=15_000, asynchrony_duration=3_000,
+                      simulate_order_stall=False, order_stall_start=10_000,
+                      order_stall_duration=50_000):
     return {
         'timeout_delay': 5_000,  # ms
         'header_size': 32,  # bytes
@@ -62,6 +64,9 @@ def _make_node_params(execution='none', workload='erc20', executor='sequential',
         'simulate_asynchrony': bool(simulate_asynchrony),
         'asynchrony_start': int(asynchrony_start), #ms
         'asynchrony_duration': int(asynchrony_duration), #ms
+        'simulate_order_stall': bool(simulate_order_stall),
+        'order_stall_start': int(order_stall_start),
+        'order_stall_duration': int(order_stall_duration),
 
         # EVM execution config for primaries.
         'evm_execution_mode': execution,
@@ -279,6 +284,47 @@ def jitter(ctx, debug=True, execution='ordered', workload='erc20',
         simulate_asynchrony=True,
         asynchrony_start=asynchrony_start,
         asynchrony_duration=asynchrony_duration,
+    )
+    try:
+        ret = LocalBench(bench_params, node_params).run(debug)
+        print(ret.result())
+    except BenchError as e:
+        Print.error(e)
+
+
+@task
+def attack(ctx, debug=True, execution='ordered', workload='erc20',
+           executor='sequential', artifacts='.', num_clusters=5,
+           families_per_cluster=5, people_per_family=8,
+           order_stall_start=10_000, order_stall_duration=50_000,
+           faults=0, nodes=4, workers=1, rate=400, tx_size=512,
+           duration=60, runs=1):
+    ''' Run a deterministic consecutive order-stall benchmark on localhost '''
+    bench_params = _make_bench_params(
+        workload=workload,
+        artifacts=artifacts,
+        num_clusters=num_clusters,
+        families_per_cluster=families_per_cluster,
+        people_per_family=people_per_family,
+        faults=faults,
+        nodes=nodes,
+        workers=workers,
+        rate=rate,
+        tx_size=tx_size,
+        duration=duration,
+        runs=runs,
+    )
+    node_params = _make_node_params(
+        execution=execution,
+        workload=workload,
+        executor=executor,
+        artifacts=artifacts,
+        num_clusters=num_clusters,
+        families_per_cluster=families_per_cluster,
+        people_per_family=people_per_family,
+        simulate_order_stall=True,
+        order_stall_start=order_stall_start,
+        order_stall_duration=order_stall_duration,
     )
     try:
         ret = LocalBench(bench_params, node_params).run(debug)

@@ -50,6 +50,19 @@ Run a jitter/asynchrony evaluation with the helper script:
 bash jitterrun.sh 60 4 1 400 10 50 ordered erc20 sequential
 ```
 
+Run the deterministic consecutive order-stall attack:
+
+```bash
+fab attack --execution=ordered --workload=erc20 \
+    --order-stall-start=10000 --order-stall-duration=50000 \
+    --duration=60
+```
+
+During `[order_stall_start, order_stall_start + order_stall_duration)`, primaries withhold
+outgoing `Prepare` consensus requests. The normal timeout and view-change protocol then runs;
+the attack does not mark a consensus instance as undecided. At the end of the interval, the latest
+still-current prepare for each slot is released and stale prepares are discarded.
+
 ## Parameters
 
 `fab local` currently accepts these parameters:
@@ -72,6 +85,9 @@ bash jitterrun.sh 60 4 1 400 10 50 ordered erc20 sequential
 - `simulate_asynchrony`: enable the built-in Autobahn asynchrony simulation. Default: `False`.
 - `asynchrony_start`: asynchrony start time in milliseconds after slot 1 commits. Default: `15000`.
 - `asynchrony_duration`: asynchrony duration in milliseconds. Default: `3000`.
+- `simulate_order_stall`: enable deterministic consecutive order-stall behavior. Default: `False`.
+- `order_stall_start`: attack start time in milliseconds after primary startup. Default: `10000`.
+- `order_stall_duration`: attack duration in milliseconds. Default: `50000`.
 
 The dedicated `fab jitter` task enables `simulate_asynchrony=True` automatically and defaults to:
 
@@ -80,6 +96,14 @@ The dedicated `fab jitter` task enables `simulate_asynchrony=True` automatically
 - `executor=sequential`
 - `asynchrony_start=10000`
 - `asynchrony_duration=50000`
+
+The dedicated `fab attack` task enables `simulate_order_stall=True` automatically and defaults to:
+
+- `execution=ordered`
+- `workload=erc20`
+- `executor=sequential`
+- `order_stall_start=10000`
+- `order_stall_duration=50000`
 
 The benchmark configuration embedded in `fabfile.py` currently uses:
 
@@ -120,6 +144,7 @@ The printed summary contains:
 - `Faults`, `Committee size`, `Worker(s) per node)`: deployment shape
 - `Execution`, `Workload`, `Executor`: the execution configuration used for this run
 - `Simulated asynchrony`, `Asynchrony start`, `Asynchrony duration`: whether the jitter/asynchrony mode was enabled and when it ran
+- `Order-stall attack`, `Order-stall start`, `Order-stall duration`: whether the deterministic attack was enabled and its interval
 - `Input rate`, `Transaction size`, `Execution time`: client-side benchmark settings
 - `Header size`, `Max header delay`, `GC depth`, `Sync retry delay`, `Sync retry nodes`, `Batch size`, `Max batch delay`: protocol configuration parsed from the node logs
 - `Consensus TPS/BPS/latency`: ordering-layer throughput and latency

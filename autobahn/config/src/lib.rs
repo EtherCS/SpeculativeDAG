@@ -100,6 +100,11 @@ pub struct Parameters {
     pub asynchrony_start: u64,
     pub asynchrony_duration: u64,
 
+    // Deterministic consecutive order-stall attack.
+    pub simulate_order_stall: bool,
+    pub order_stall_start: u64,
+    pub order_stall_duration: u64,
+
     // EVM execution config
     pub evm_execution_mode: String,
     pub evm_workload: String,
@@ -135,6 +140,9 @@ impl Default for Parameters {
             simulate_asynchrony: false,
             asynchrony_start: 20_000, //20 second in
             asynchrony_duration: 10_000, //10 seconds
+            simulate_order_stall: false,
+            order_stall_start: 10_000,
+            order_stall_duration: 50_000,
 
             evm_execution_mode: "none".to_string(),
             evm_workload: "erc20".to_string(),
@@ -168,6 +176,10 @@ impl Parameters {
         info!(
             "Simulated asynchrony: {}. Start: {} ms. Duration: {} ms",
             self.simulate_asynchrony, self.asynchrony_start, self.asynchrony_duration
+        );
+        info!(
+            "Order-stall attack: {}. Start: {} ms. Duration: {} ms",
+            self.simulate_order_stall, self.order_stall_start, self.order_stall_duration
         );
         info!(
             "EVM execution mode: {}. Workload: {}. PEVM executor: {}",

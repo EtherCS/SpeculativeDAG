@@ -114,6 +114,10 @@ class LogParser:
             r'Simulated asynchrony: (true|false)\. Start: (\d+) ms\. Duration: (\d+) ms',
             log,
         )
+        order_stall_match = search(
+            r'Order-stall attack: (true|false)\. Start: (\d+) ms\. Duration: (\d+) ms',
+            log,
+        )
         configs = {
             #'timeout_delay': int(
             #    search(r'Timeout delay .* (\d+)', log).group(1)
@@ -145,6 +149,9 @@ class LogParser:
             'simulate_asynchrony': asynchrony_match.group(1) == 'true' if asynchrony_match else False,
             'asynchrony_start': int(asynchrony_match.group(2)) if asynchrony_match else 0,
             'asynchrony_duration': int(asynchrony_match.group(3)) if asynchrony_match else 0,
+            'simulate_order_stall': order_stall_match.group(1) == 'true' if order_stall_match else False,
+            'order_stall_start': int(order_stall_match.group(2)) if order_stall_match else 0,
+            'order_stall_duration': int(order_stall_match.group(3)) if order_stall_match else 0,
         }
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
@@ -232,6 +239,9 @@ class LogParser:
         simulate_asynchrony = self.configs[0]['simulate_asynchrony']
         asynchrony_start = self.configs[0]['asynchrony_start']
         asynchrony_duration = self.configs[0]['asynchrony_duration']
+        simulate_order_stall = self.configs[0]['simulate_order_stall']
+        order_stall_start = self.configs[0]['order_stall_start']
+        order_stall_duration = self.configs[0]['order_stall_duration']
 
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
@@ -254,6 +264,9 @@ class LogParser:
             f' Simulated asynchrony: {simulate_asynchrony}\n'
             f' Asynchrony start: {asynchrony_start:,} ms\n'
             f' Asynchrony duration: {asynchrony_duration:,} ms\n'
+            f' Order-stall attack: {simulate_order_stall}\n'
+            f' Order-stall start: {order_stall_start:,} ms\n'
+            f' Order-stall duration: {order_stall_duration:,} ms\n'
             f' Input rate: {sum(self.rate):,} tx/s\n'
             f' Transaction size: {self.size[0]:,} B\n'
             f' Execution time: {round(duration):,} s\n'

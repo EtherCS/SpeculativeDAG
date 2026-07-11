@@ -211,6 +211,9 @@ impl Primary {
             parameters.simulate_asynchrony,
             parameters.asynchrony_start,
             parameters.asynchrony_duration,
+            parameters.simulate_order_stall,
+            parameters.order_stall_start,
+            parameters.order_stall_duration,
         );
 
         Committer::spawn(

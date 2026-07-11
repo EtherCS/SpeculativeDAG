@@ -28,10 +28,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 //use std::task::Poll;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::time::sleep;
 use std::cmp::max;
 //use tokio::time::{sleep, Duration, Instant};
 
@@ -141,6 +142,15 @@ pub struct Core {
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
     current_time: Instant,
     async_delayed_prepare: Option<ConsensusMessage>,
+
+    // Dedicated order-stall attack state. The map keeps only the latest prepare per slot;
+    // obsolete views must not be replayed when the attack ends.
+    simulate_order_stall: bool,
+    order_stall_start: u64,
+    order_stall_duration: u64,
+    order_stall_start_time: Instant,
+    order_stall_delayed_prepares: HashMap<Slot, ConsensusMessage>,
+    order_stall_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl Core {
@@ -175,6 +185,9 @@ impl Core {
         simulate_asynchrony: bool,
         asynchrony_start: u64,
         asynchrony_duration: u64,
+        simulate_order_stall: bool,
+        order_stall_start: u64,
+        order_stall_duration: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -243,6 +256,12 @@ impl Core {
                 async_timer_futures: FuturesUnordered::new(),
                 current_time: Instant::now(),
                 async_delayed_prepare: None,
+                simulate_order_stall,
+                order_stall_start,
+                order_stall_duration,
+                order_stall_start_time: Instant::now(),
+                order_stall_delayed_prepares: HashMap::new(),
+                order_stall_timer_futures: FuturesUnordered::new(),
             }
             .run()
             .await;
@@ -897,8 +916,28 @@ impl Core {
         };
     }
 
+    fn order_stall_active(&self) -> bool {
+        if !self.simulate_order_stall {
+            return false;
+        }
+        let elapsed = self.order_stall_start_time.elapsed().as_millis() as u64;
+        elapsed >= self.order_stall_start
+            && elapsed < self.order_stall_start.saturating_add(self.order_stall_duration)
+    }
+
     #[async_recursion]
     async fn send_consensus_req(&mut self, mut consensus_message: ConsensusMessage) -> DagResult<()> {
+        if self.order_stall_active() {
+            if let ConsensusMessage::Prepare { slot, view, .. } = &consensus_message {
+                debug!(
+                    "Order-stall attack: withholding Prepare for slot {} view {}",
+                    slot, view
+                );
+                self.order_stall_delayed_prepares
+                    .insert(*slot, consensus_message);
+                return Ok(());
+            }
+        }
 
         self.set_consensus_proposal(&mut consensus_message);
        
@@ -2030,6 +2069,18 @@ impl Core {
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
 
+        if self.simulate_order_stall {
+            let stall_end = self
+                .order_stall_start
+                .saturating_add(self.order_stall_duration);
+            debug!(
+                "Order-stall attack enabled: withholding Prepare messages during [{} ms, {} ms)",
+                self.order_stall_start, stall_end
+            );
+            self.order_stall_timer_futures
+                .push(Box::pin(sleep(Duration::from_millis(stall_end))));
+        }
+
         //Simulate asynchrony duration:
         /*if self.simulate_asynchrony {
             debug!("added async timers");
@@ -2146,6 +2197,25 @@ impl Core {
 
                 //Fast path loopback for external consensus
                 Some(vote) = self.fast_timer_futures.next() => self.process_consensus_vote(vote, true).await,
+
+                Some(()) = self.order_stall_timer_futures.next() => {
+                    let delayed_prepares = std::mem::take(&mut self.order_stall_delayed_prepares);
+                    for (slot, delayed_prepare) in delayed_prepares {
+                        let still_relevant = match &delayed_prepare {
+                            ConsensusMessage::Prepare { view, .. } => {
+                                *view == self.views.get(&slot).copied().unwrap_or_default()
+                            }
+                            _ => false,
+                        };
+                        if still_relevant {
+                            debug!("Order-stall attack ended: releasing Prepare for slot {}", slot);
+                            let _ = self.send_consensus_req(delayed_prepare).await;
+                        } else {
+                            debug!("Order-stall attack ended: dropping stale Prepare for slot {}", slot);
+                        }
+                    }
+                    Ok(())
+                },
 
                 Some((slot, view)) = self.async_timer_futures.next() => {
                     self.during_simulated_asynchrony = !self.during_simulated_asynchrony; 

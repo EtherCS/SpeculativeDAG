@@ -188,6 +188,8 @@ class NodeParameters:
             inputs += [json['max_batch_delay']]
             inputs += [json['asynchrony_start']]
             inputs += [json['asynchrony_duration']]
+            inputs += [json['order_stall_start']]
+            inputs += [json['order_stall_duration']]
         except KeyError as e:
             raise ConfigError(f'Malformed parameters: missing key {e}')
 
@@ -196,6 +198,8 @@ class NodeParameters:
 
         if not isinstance(json['simulate_asynchrony'], bool):
             raise ConfigError('Invalid simulate_asynchrony type')
+        if not isinstance(json['simulate_order_stall'], bool):
+            raise ConfigError('Invalid simulate_order_stall type')
 
         self.json = json
 
