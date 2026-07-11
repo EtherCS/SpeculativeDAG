@@ -226,6 +226,7 @@ impl ExecutionService {
                 );
                 self.committed_executor
                     .commit_speculative_execution(write_set);
+                self.log_execution_completion(header);
                 return Ok(());
             }
 
@@ -248,6 +249,7 @@ impl ExecutionService {
             txs.len()
         );
         self.committed_executor.execute_checked(txs)?;
+        self.log_execution_completion(header);
         Ok(())
     }
 
@@ -256,6 +258,13 @@ impl ExecutionService {
         let committed_state_version = self.committed_state_version;
         self.speculative_results
             .retain(|_, (base_version, _)| *base_version >= committed_state_version);
+    }
+
+    fn log_execution_completion(&self, header: &Header) {
+        for digest in header.payload.keys() {
+            // Emit this after the committed state transition is applied.
+            info!("Executed {} -> {:?}", header, digest);
+        }
     }
 
     async fn execute_speculative_header(&mut self, header: &Header) -> Result<()> {

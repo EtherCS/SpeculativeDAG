@@ -44,9 +44,10 @@ class LogParser:
                 results = p.map(self._parse_primaries, primaries)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, commits, self.configs, primary_ips = zip(*results)
+        proposals, commits, executions, self.configs, primary_ips = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
+        self.executions = self._merge_results([x.items() for x in executions])
 
         # Parse the workers logs.
         try:
@@ -106,6 +107,10 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
+        tmp = findall(r'\[(.*Z) .* Executed B\d+\([^ ]+\) -> ([^ ]+=)', log)
+        tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        executions = self._merge_results([tmp])
+
         execution_match = search(
             r'EVM execution mode: ([^.]+)\. Workload: ([^.]+)\. PEVM executor: ([^\n]+)',
             log,
@@ -156,7 +161,7 @@ class LogParser:
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
 
-        return proposals, commits, configs, ip
+        return proposals, commits, executions, configs, ip
 
     def _parse_workers(self, log):
         if search(r'(?:panic|Error)', log) is not None:
@@ -207,10 +212,11 @@ class LogParser:
         set_first = True
         for sent, received in zip(self.sent_samples, self.received_samples):
             for tx_id, batch_id in received.items():
-                if batch_id in self.commits:
+                completion_times = self.executions or self.commits
+                if batch_id in completion_times:
                     assert tx_id in sent  # We receive txs that we sent.
                     start = sent[tx_id]
-                    end = self.commits[batch_id]
+                    end = completion_times[batch_id]
                     if set_first:
                         first_start = start
                         first_end = end
