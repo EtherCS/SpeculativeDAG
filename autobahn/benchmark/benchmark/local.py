@@ -27,7 +27,9 @@ class LocalBench:
 
     def _background_run(self, command, log_file):
         name = splitext(basename(log_file))[0]
-        cmd = f'stdbuf -oL -eL {command} > {shlex.quote(abspath(log_file))} 2>&1'
+        # The parser depends on INFO records from clients, primaries, and workers.
+        # Do not let an inherited RUST_LOG=warn suppress those records.
+        cmd = f'RUST_LOG=info stdbuf -oL -eL {command} > {shlex.quote(abspath(log_file))} 2>&1'
         subprocess.run(['tmux', 'new', '-d', '-s', name, 'zsh', '-lc', cmd], check=True)
 
     def _kill_nodes(self):
