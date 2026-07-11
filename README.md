@@ -256,6 +256,24 @@ same format as the other experiment scripts. It also samples each validator's re
 In `resource-summary.csv`, the `all` row is the sum across validators at each sample time. Its CPU
 percentage can exceed 100% when validators use multiple CPU cores.
 
+## Ablation Result Summaries
+
+Run the summarizers from the `mysticeti/scripts` directory:
+
+```bash
+cd mysticeti/scripts
+python3 summarize_ablation_aps.py
+python3 summarize_ablation_snapshot.py
+python3 summarize_ablation_snapshot_attack.py
+```
+
+The scripts group timestamped directories with the same experiment parameters and average repeated
+runs. The APS summarizer reports prediction hit rate and p99 transaction commit latency. The
+snapshot and snapshot-attack summarizers report snapshot-store size, p99 transaction commit
+latency, average CPU utilization, and average RSS memory. CPU and RSS are averaged across
+authorities; the aggregate `all` row is excluded. Each script accepts an optional result root as
+its first argument when the default directory is not being used.
+
 ## Microbenchmark Sweep
 
 Run a simple load sweep for a chosen mode:
