@@ -734,18 +734,23 @@ impl PevmTransactionGenerator {
         const AMOUNT: u64 = 10_000;
         let mut transactions = Vec::new();
 
-        for (weth_address, families) in &self.clusters {
-            for family in families {
+        let (_, num_families_per_cluster, _) = self.workload_type.dimensions();
+
+        for (cluster_id, (weth_address, families)) in self.clusters.iter().enumerate() {
+            for (family_id, family) in families.iter().enumerate() {
                 if family.len() < 2 {
+                    continue;
+                }
+                // A family shares one operator account for transferFrom. Keep the
+                // entire family on one client so no two generators reuse its nonce.
+                let global_family_id = cluster_id * num_families_per_cluster + family_id;
+                if global_family_id % self.replica_num as usize != self.replica_id as usize {
                     continue;
                 }
                 let operator = family[0];
                 let users = &family[1..];
 
                 for (index, user) in users.iter().enumerate() {
-                    if index % self.replica_num as usize != self.replica_id as usize {
-                        continue;
-                    }
                     let recipient = users[(index + 1) % users.len()];
                     let phase = self.nonce_map[user] % 4;
 
@@ -815,18 +820,20 @@ impl PevmTransactionGenerator {
         const GAS_LIMIT: u64 = 200_000;
         let mut transactions = Vec::new();
 
-        let num_people_per_family = match self.workload_type {
-            WorkloadType::Uniswap(_, _, num_people_per_family) => num_people_per_family,
-            _ => unreachable!(),
-        };
+        let (_, num_families_per_cluster, num_people_per_family) =
+            self.workload_type.dimensions();
 
-        for counter in 0..num_people_per_family {
-            if counter % self.replica_num as usize != self.replica_id as usize {
-                continue;
-            }
-            for (single_swap_address, families) in &self.clusters {
-                for family in families {
-                    let trader = family[counter];
+        for (cluster_id, (single_swap_address, families)) in self.clusters.iter().enumerate() {
+            for (family_id, family) in families.iter().enumerate() {
+                for (member_id, trader) in family.iter().copied().enumerate() {
+                    let global_member_id = (cluster_id * num_families_per_cluster + family_id)
+                        * num_people_per_family
+                        + member_id;
+                    if global_member_id % self.replica_num as usize
+                        != self.replica_id as usize
+                    {
+                        continue;
+                    }
                     let phase = self.nonce_map[&trader] % 4;
                     let data = match phase {
                         0 => uniswap::sell_token0(U256::from(2_000u64)),
