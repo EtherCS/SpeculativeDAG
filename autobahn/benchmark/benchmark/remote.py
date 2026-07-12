@@ -37,10 +37,20 @@ class Bench:
         self.manager = InstanceManager.make()
         self.settings = self.manager.settings
         try:
-            ctx.connect_kwargs.pkey = RSAKey.from_private_key_file(
-                self.manager.settings.key_path
-            )
-            self.connect = ctx.connect_kwargs
+            # Validate the configured key eagerly. Paramiko will load it by path
+            # for each connection, avoiding a shared key object across threads.
+            RSAKey.from_private_key_file(self.manager.settings.key_path)
+            self.connect = dict(ctx.connect_kwargs)
+            self.connect.update({
+                'key_filename': self.manager.settings.key_path,
+                # Do not try unrelated agent/default keys before the AWS key.
+                'allow_agent': False,
+                'look_for_keys': False,
+                # VPN routes can make concurrent SSH handshakes considerably slower.
+                'timeout': 60,
+                'banner_timeout': 60,
+                'auth_timeout': 60,
+            })
         except (IOError, PasswordRequiredException, SSHException) as e:
             raise BenchError('Failed to load SSH key', e)
 
@@ -52,6 +62,91 @@ class Bench:
         else:
             if output.stderr:
                 raise ExecutionError(output.stderr)
+
+    def _upload_files(self, host, files, attempts=3):
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            connection = Connection(
+                host,
+                user=self.settings.username,
+                connect_kwargs=self.connect,
+            )
+            try:
+                for local_path in files:
+                    connection.put(local_path, '.')
+                return
+            except (OSError, SSHException) as error:
+                last_error = error
+                if attempt < attempts:
+                    sleep(2 * attempt)
+            finally:
+                connection.close()
+
+        file_list = ', '.join(files)
+        raise ExecutionError(
+            f'Failed to upload [{file_list}] to {host} after '
+            f'{attempts} attempts: {last_error}'
+        )
+
+    def _run_remote_command(self, host, command, attempts=3):
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            connection = Connection(
+                host,
+                user=self.settings.username,
+                connect_kwargs=self.connect,
+            )
+            try:
+                return connection.run(command, hide=True)
+            except (OSError, SSHException) as error:
+                last_error = error
+                if attempt < attempts:
+                    sleep(2 * attempt)
+            finally:
+                connection.close()
+
+        raise ExecutionError(
+            f'Failed to run remote command on {host} after '
+            f'{attempts} attempts: {last_error}'
+        )
+
+    def _download_logs_scp(self, host, remote_files, attempts=3):
+        sources = [
+            f'{self.settings.username}@{host}:{remote_file}'
+            for remote_file in remote_files
+        ]
+        command = [
+            'scp',
+            '-C',
+            '-q',
+            '-i', self.settings.key_path,
+            '-o', 'IdentitiesOnly=yes',
+            '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'BatchMode=yes',
+            '-o', 'ConnectTimeout=60',
+            *sources,
+            PathMaker.logs_path(),
+        ]
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                subprocess.run(
+                    command,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                return
+            except subprocess.CalledProcessError as error:
+                last_error = error.stderr.strip() or str(error)
+                if attempt < attempts:
+                    sleep(2 * attempt)
+
+        raise ExecutionError(
+            f'Failed to download logs from {host} after '
+            f'{attempts} attempts: {last_error}'
+        )
 
     def install(self):
         Print.info('Installing rust and cloning the repo...')
@@ -213,8 +308,21 @@ class Bench:
                 f'./{self.settings.repo_name}/target/release/'
             )
         ]
-        g = Group(*ips, user=self.settings.username, connect_kwargs=self.connect)
-        g.run(' && '.join(cmd), hide=True)
+        # Isolate each host's SSH transport so one VPN connection failure does
+        # not invalidate a Fabric group and abort all successful updates.
+        command = ' && '.join(cmd)
+        with ThreadPoolExecutor(max_workers=min(4, len(ips))) as executor:
+            futures = {
+                executor.submit(self._run_remote_command, ip, command): ip
+                for ip in ips
+            }
+            for future, ip in futures.items():
+                try:
+                    future.result()
+                except Exception as error:
+                    raise ExecutionError(
+                        f'Failed to update {ip}: {error}'
+                    ) from error
 
     def _config(self, hosts, node_parameters, bench_parameters):
         Print.info('Generating configuration files...')
@@ -259,12 +367,22 @@ class Bench:
         names = names[:len(names)-bench_parameters.faults]
         progress = progress_bar(names, prefix='Uploading config files:')
         for i, name in enumerate(progress):
-            for ip in committee.ips(name):
-                c = Connection(ip, user=self.settings.username, connect_kwargs=self.connect)
-                c.run(f'{CommandMaker.cleanup()} || true', hide=True)
-                c.put(PathMaker.committee_file(), '.')
-                c.put(PathMaker.key_file(i), '.')
-                c.put(PathMaker.parameters_file(), '.')
+            # Collocated primary/worker addresses repeat the same host.
+            for ip in dict.fromkeys(committee.ips(name)):
+                c = Connection(
+                    ip,
+                    user=self.settings.username,
+                    connect_kwargs=self.connect,
+                )
+                try:
+                    c.run(f'{CommandMaker.cleanup()} || true', hide=True)
+                finally:
+                    c.close()
+                self._upload_files(ip, [
+                    PathMaker.committee_file(),
+                    PathMaker.key_file(i),
+                    PathMaker.parameters_file(),
+                ])
         return committee
 
     def _run_single(self, rate, committee, bench_parameters, debug=False):
@@ -422,31 +540,34 @@ class Bench:
         cmd = CommandMaker.clean_logs()
         subprocess.run([cmd], shell=True, stderr=subprocess.DEVNULL)
 
-        # Download log files.
+        # Group files by host. With collocation this downloads the client,
+        # worker, and primary logs through one SCP connection per machine.
+        files_by_host = OrderedDict()
         workers_addresses = committee.workers_addresses(faults)
-        progress = progress_bar(workers_addresses, prefix='Downloading workers logs:')
-        for i, addresses in enumerate(progress):
+        for i, addresses in enumerate(workers_addresses):
             for id, address in addresses:
                 host = Committee.ip(address)
-                c = Connection(host, user=self.settings.username, connect_kwargs=self.connect)
-                c.get(
-                    PathMaker.client_log_file(i, id), 
-                    local=PathMaker.client_log_file(i, id)
-                )
-                c.get(
-                    PathMaker.worker_log_file(i, id), 
-                    local=PathMaker.worker_log_file(i, id)
-                )
+                files_by_host.setdefault(host, []).extend([
+                    PathMaker.client_log_file(i, id),
+                    PathMaker.worker_log_file(i, id),
+                ])
 
         primary_addresses = committee.primary_addresses(faults)
-        progress = progress_bar(primary_addresses, prefix='Downloading primaries logs:')
-        for i, address in enumerate(progress):
+        for i, address in enumerate(primary_addresses):
             host = Committee.ip(address)
-            c = Connection(host, user=self.settings.username, connect_kwargs=self.connect)
-            c.get(
-                PathMaker.primary_log_file(i), 
-                local=PathMaker.primary_log_file(i)
+            files_by_host.setdefault(host, []).append(
+                PathMaker.primary_log_file(i)
             )
+
+        downloads = list(files_by_host.items())
+        with ThreadPoolExecutor(max_workers=min(4, len(downloads))) as executor:
+            futures = [
+                executor.submit(self._download_logs_scp, host, files)
+                for host, files in downloads
+            ]
+            progress = progress_bar(futures, prefix='Downloading logs:')
+            for future in progress:
+                future.result()
 
         # Parse logs and return the parser.
         Print.info('Parsing logs and computing performance...')
@@ -480,7 +601,7 @@ class Bench:
             committee = self._config(
                 selected_hosts, node_parameters, bench_parameters
             )
-        except (subprocess.SubprocessError, GroupException) as e:
+        except (subprocess.SubprocessError, GroupException, ExecutionError) as e:
             e = FabricError(e) if isinstance(e, GroupException) else e
             raise BenchError('Failed to configure nodes', e)
 
@@ -538,7 +659,12 @@ class Bench:
                             executor,
                             experiment,
                         ))
-                    except (subprocess.SubprocessError, GroupException, ParseError) as e:
+                    except (
+                        subprocess.SubprocessError,
+                        GroupException,
+                        ParseError,
+                        ExecutionError,
+                    ) as e:
                         self.kill(hosts=selected_hosts)
                         if isinstance(e, GroupException):
                             e = FabricError(e)
