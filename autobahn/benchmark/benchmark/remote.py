@@ -169,7 +169,10 @@ class Bench:
 
     def _background_run(self, host, command, log_file):
         name = splitext(basename(log_file))[0]
-        cmd = f'tmux new -d -s "{name}" "{command} |& tee {log_file}"'
+        # The log parser needs INFO records from clients, primaries, and workers.
+        # Set this explicitly because the remote login environment may inherit a
+        # more restrictive RUST_LOG value.
+        cmd = f'tmux new -d -s "{name}" "RUST_LOG=info {command} |& tee {log_file}"'
         c = Connection(host, user=self.settings.username, connect_kwargs=self.connect)
         output = c.run(cmd, hide=True)
         self._check_stderr(output)

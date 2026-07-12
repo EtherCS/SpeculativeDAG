@@ -58,12 +58,25 @@ fab attack --execution=ordered --workload=erc20 \
     --duration=60
 ```
 
+Run the same attack on the configured remote testbed:
+
+```bash
+fab remote-attack --execution=speculative --workload=erc20 \
+    --order-stall-start=10000 --order-stall-duration=50000 \
+    --duration=60
+```
+
 During `[order_stall_start, order_stall_start + order_stall_duration)`, primaries withhold
 outgoing `Prepare` consensus requests. The normal timeout and view-change protocol then runs;
 the attack does not mark a consensus instance as undecided. At the end of the interval, the latest
 still-current prepare for each slot is released and stale prepares are discarded.
 
 ## Parameters
+
+`fab local` and `fab remote-attack` accept the common workload, execution,
+executor, committee, rate, duration, and attack timing parameters listed below.
+`fab remote` remains the asynchronous remote benchmark, while
+`fab remote-attack` enables the deterministic order-stall attack automatically.
 
 `fab local` currently accepts these parameters:
 
@@ -104,6 +117,11 @@ The dedicated `fab attack` task enables `simulate_order_stall=True` automaticall
 - `executor=sequential`
 - `order_stall_start=10000`
 - `order_stall_duration=50000`
+
+The dedicated `fab remote-attack` task has the same attack defaults as `fab attack`,
+but starts the benchmark through the configured remote testbed. It writes the
+retrieved remote logs and the parsed summary using the same remote benchmark
+pipeline as `fab remote`.
 
 The benchmark configuration embedded in `fabfile.py` currently uses:
 
