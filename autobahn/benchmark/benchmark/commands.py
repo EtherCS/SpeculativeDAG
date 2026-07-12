@@ -90,4 +90,8 @@ class CommandMaker:
     def alias_binaries(origin):
         assert isinstance(origin, str)
         node, client = join(origin, 'node'), join(origin, 'benchmark_client')
-        return f'rm node ; rm benchmark_client ; ln -s {node} . ; ln -s {client} .'
+        return (
+            f'ln -sfn {node} node && '
+            f'ln -sfn {client} benchmark_client && '
+            'test -x ./node && test -x ./benchmark_client'
+        )

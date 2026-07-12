@@ -5,16 +5,18 @@ from fabric.exceptions import GroupException
 from paramiko import RSAKey
 from paramiko.ssh_exception import PasswordRequiredException, SSHException
 from os.path import basename, splitext
+from datetime import datetime
 from time import sleep
 from math import ceil
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
 from benchmark.utils import BenchError, Print, PathMaker, progress_bar
 from benchmark.commands import CommandMaker
 from benchmark.logs import LogParser, ParseError
-from benchmark.gcp_instance import InstanceManager
+from benchmark.instance import InstanceManager
 
 
 class FabricError(Exception):
@@ -53,25 +55,27 @@ class Bench:
 
     def install(self):
         Print.info('Installing rust and cloning the repo...')
+        repo_root = self.settings.repo_name.split('/')[0]
         cmd = [
             'sudo apt-get update',
             'sudo apt-get -y upgrade',
             'sudo apt-get -y autoremove',
 
-            # The following dependencies prevent the error: [error: linker `cc` not found].
-            'sudo apt-get -y install build-essential',
-            'sudo apt-get -y install cmake',
+            # Native dependencies for RocksDB, bindgen, and openssl-sys.
+            'sudo apt-get -y install build-essential cmake clang '
+            'pkg-config libssl-dev',
 
             # Install rust (non-interactive).
             'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y',
             'source $HOME/.cargo/env',
             'rustup default stable',
 
-            # This is missing from the Rocksdb installer (needed for Rocksdb).
-            'sudo apt-get install -y clang',
-
-            # Clone the repo.
-            f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))'
+            # Clone the monorepo once; repo_name may select a subdirectory in it.
+            f'(test -d {repo_root}/.git || '
+            f'git clone {self.settings.repo_url} {repo_root})',
+            f'(cd {repo_root} && git fetch -f && '
+            f'git checkout -f {self.settings.branch} && git pull -f)',
+            f'test -d {self.settings.repo_name}/node',
         ]
         hosts = self.manager.hosts(flat=True)
         print(hosts)
@@ -177,6 +181,17 @@ class Bench:
         output = c.run(cmd, hide=True)
         self._check_stderr(output)
 
+    def _background_run_many(self, launches):
+        if not launches:
+            return
+        with ThreadPoolExecutor(max_workers=len(launches)) as executor:
+            futures = [
+                executor.submit(self._background_run, host, command, log_file)
+                for host, command, log_file in launches
+            ]
+            for future in futures:
+                future.result()
+
     def _update(self, hosts, collocate):
         if collocate:
             ips = list(set(hosts))
@@ -186,10 +201,12 @@ class Bench:
         Print.info(
             f'Updating {len(ips)} machines (branch "{self.settings.branch}")...'
         )
+        repo_root = self.settings.repo_name.split('/')[0]
         cmd = [
-            f'(cd {self.settings.repo_name} && git fetch -f)',
-            f'(cd {self.settings.repo_name} && git checkout -f {self.settings.branch})',
-            f'(cd {self.settings.repo_name} && git pull -f)',
+            f'(cd {repo_root} && git fetch -f)',
+            f'(cd {repo_root} && git checkout -f {self.settings.branch})',
+            f'(cd {repo_root} && git pull -f)',
+            f'test -d {self.settings.repo_name}/node',
             'source $HOME/.cargo/env',
             f'(cd {self.settings.repo_name}/node && {CommandMaker.compile()})',
             CommandMaker.alias_binaries(
@@ -248,7 +265,6 @@ class Bench:
                 c.put(PathMaker.committee_file(), '.')
                 c.put(PathMaker.key_file(i), '.')
                 c.put(PathMaker.parameters_file(), '.')
-
         return committee
 
     def _run_single(self, rate, committee, bench_parameters, debug=False):
@@ -265,6 +281,7 @@ class Bench:
         workers_addresses = committee.workers_addresses(faults)
         rate_share = ceil(rate / committee.workers())
         replica_num = committee.workers()
+        launches = []
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
                 host = Committee.ip(address)
@@ -284,10 +301,12 @@ class Bench:
                 )
                 print(cmd)
                 log_file = PathMaker.client_log_file(i, id)
-                self._background_run(host, cmd, log_file)
+                launches.append((host, cmd, log_file))
+        self._background_run_many(launches)
 
         # Run the primaries (except the faulty ones).
         Print.info('Booting primaries...')
+        launches = []
         for i, address in enumerate(committee.primary_addresses(faults)):
             host = Committee.ip(address)
             cmd = CommandMaker.run_primary(
@@ -298,10 +317,12 @@ class Bench:
                 debug=debug
             )
             log_file = PathMaker.primary_log_file(i)
-            self._background_run(host, cmd, log_file)
+            launches.append((host, cmd, log_file))
+        self._background_run_many(launches)
 
         # Run the workers (except the faulty ones).
         Print.info('Booting workers...')
+        launches = []
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
                 host = Committee.ip(address)
@@ -314,7 +335,8 @@ class Bench:
                     debug=debug
                 )
                 log_file = PathMaker.worker_log_file(i, id)
-                self._background_run(host, cmd, log_file)
+                launches.append((host, cmd, log_file))
+        self._background_run_many(launches)
 
          # Wait for all transactions to be processed.
         duration = bench_parameters.duration
@@ -474,19 +496,47 @@ class Bench:
                 for i in range(bench_parameters.runs):
                     Print.heading(f'Run {i+1}/{bench_parameters.runs}')
                     try:
+                        faults = bench_parameters.faults
+                        execution = node_parameters.json.get(
+                            'evm_execution_mode', 'none'
+                        ) or 'none'
+                        workload = node_parameters.json.get(
+                            'evm_workload', 'none'
+                        ) or 'none'
+                        executor = node_parameters.json.get(
+                            'evm_executor_mode', 'sequential'
+                        ) or 'sequential'
+                        experiment = (
+                            'attack' if node_parameters.json.get(
+                                'simulate_order_stall', False
+                            ) else 'common'
+                        )
+                        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+                        PathMaker.set_logs_path(PathMaker.benchmark_logs_path(
+                            faults,
+                            n,
+                            r,
+                            execution,
+                            workload,
+                            executor,
+                            experiment,
+                            timestamp,
+                        ))
+                        Print.info(f'Logs directory: {PathMaker.logs_path()}')
+
                         self._run_single(
                             r, committee_copy, bench_parameters, debug
                         )
 
-                        faults = bench_parameters.faults
                         logger = self._logs(committee_copy, faults)
                         logger.print(PathMaker.result_file(
                             faults,
-                            n, 
-                            bench_parameters.workers,
-                            bench_parameters.collocate,
-                            r, 
-                            bench_parameters.tx_size, 
+                            n,
+                            r,
+                            execution,
+                            workload,
+                            executor,
+                            experiment,
                         ))
                     except (subprocess.SubprocessError, GroupException, ParseError) as e:
                         self.kill(hosts=selected_hosts)

@@ -9,8 +9,10 @@ use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
 use crypto::SignatureService;
 use env_logger::Env;
+use pevm::api::{ensure_workload_artifacts, WorkloadType};
 use primary::Header;
 use primary::Primary;
+use std::path::PathBuf;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
 use worker::Worker;
@@ -30,6 +32,15 @@ async fn main() -> Result<()> {
             SubCommand::with_name("generate_keys")
                 .about("Print a fresh key pair to file")
                 .args_from_usage("--filename=<FILE> 'The file where to print the new key pair'"),
+        )
+        .subcommand(
+            SubCommand::with_name("prepare_workload")
+                .about("Materialize a canonical PEVM workload state")
+                .args_from_usage("--workload=<NAME> 'PEVM workload: erc20|weth|uniswap'")
+                .args_from_usage("--artifacts=<PATH> 'Directory for PEVM workload artifacts'")
+                .args_from_usage("--num-clusters=<INT> 'Number of workload clusters'")
+                .args_from_usage("--families-per-cluster=<INT> 'Number of families per cluster'")
+                .args_from_usage("--people-per-family=<INT> 'Number of people per family'"),
         )
         .subcommand(
             SubCommand::with_name("run")
@@ -74,9 +85,48 @@ async fn main() -> Result<()> {
         ("generate_keys", Some(sub_matches)) => KeyPair::new()
             .export(sub_matches.value_of("filename").unwrap())
             .context("Failed to generate key pair")?,
+        ("prepare_workload", Some(sub_matches)) => prepare_workload(sub_matches)?,
         ("run", Some(sub_matches)) => run(sub_matches).await?,
         _ => unreachable!(),
     }
+    Ok(())
+}
+
+fn prepare_workload(matches: &ArgMatches<'_>) -> Result<()> {
+    let num_clusters = matches
+        .value_of("num-clusters")
+        .unwrap()
+        .parse()
+        .context("The number of clusters must be a positive integer")?;
+    let families_per_cluster = matches
+        .value_of("families-per-cluster")
+        .unwrap()
+        .parse()
+        .context("The number of families per cluster must be a positive integer")?;
+    let people_per_family = matches
+        .value_of("people-per-family")
+        .unwrap()
+        .parse()
+        .context("The number of people per family must be a positive integer")?;
+    let workload = match matches.value_of("workload").unwrap() {
+        "erc20" => WorkloadType::ERC20(num_clusters, families_per_cluster, people_per_family),
+        "weth" => WorkloadType::WETH(num_clusters, families_per_cluster, people_per_family),
+        "uniswap" => WorkloadType::Uniswap(num_clusters, families_per_cluster, people_per_family),
+        other => return Err(anyhow::anyhow!("unsupported workload '{other}'")),
+    };
+
+    let artifacts_dir = PathBuf::from(matches.value_of("artifacts").unwrap());
+    std::fs::create_dir_all(&artifacts_dir)
+        .context("Failed to create the workload artifact directory")?;
+    let (storage_name, addresses_name) = workload.artifact_file_names();
+    let storage_path = artifacts_dir.join(storage_name);
+    let addresses_path = artifacts_dir.join(addresses_name);
+    ensure_workload_artifacts(
+        &workload,
+        &storage_path.to_string_lossy(),
+        &addresses_path.to_string_lossy(),
+    )
+    .context("Failed to prepare PEVM workload artifacts")?;
     Ok(())
 }
 

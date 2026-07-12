@@ -8,14 +8,13 @@ class SettingsError(Exception):
 
 class Settings:
     def __init__(self, key_name, key_path, base_port, repo_name, repo_url,
-                 branch, instance_type, aws_regions, project_id, templates, username):
+                 branch, instance_type, regions, project_id=None,
+                 templates=None, username='ubuntu'):
         inputs_str = [
             key_name, key_path, repo_name, repo_url, branch, instance_type
         ]
-        if isinstance(aws_regions, list):
-            regions = aws_regions
-        else:
-            regions = [aws_regions]
+        if not isinstance(regions, list):
+            regions = [regions]
         inputs_str += regions
         ok = all(isinstance(x, str) for x in inputs_str)
         ok &= isinstance(base_port, int)
@@ -33,9 +32,10 @@ class Settings:
         self.branch = branch
 
         self.instance_type = instance_type
+        self.aws_regions = regions
         self.gcp_zones = regions
         self.project_id = project_id
-        self.templates = templates
+        self.templates = templates or []
         self.username = username
 
     @classmethod
@@ -53,9 +53,9 @@ class Settings:
                 data['repo']['branch'],
                 data['instances']['type'],
                 data['instances']['regions'],
-                data['project_id'],
-                data['instances']['templates'],
-                data['username'],
+                data.get('project_id'),
+                data['instances'].get('templates'),
+                data.get('username', 'ubuntu'),
             )
         except (OSError, JSONDecodeError) as e:
             raise SettingsError(str(e))

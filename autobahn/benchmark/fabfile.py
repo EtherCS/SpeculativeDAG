@@ -30,8 +30,8 @@ def _make_bench_params(workload='erc20', artifacts='.', num_clusters=5,
         'families_per_cluster': int(families_per_cluster),
         'people_per_family': int(people_per_family),
 
-        # Unused
-        'simulate_partition': True,
+        # Legacy network-partition experiment; disabled for normal benchmarks.
+        'simulate_partition': False,
         'partition_start': 5,
         'partition_duration': 5,
         'partition_nodes': 1,
@@ -175,12 +175,12 @@ def install(ctx):
 
 
 @task
-def remote(ctx, debug=True, execution='none', workload='erc20',
+def remote(ctx, debug=True, execution='ordered', workload='erc20',
            executor='sequential', artifacts='.', num_clusters=5,
            families_per_cluster=5, people_per_family=8,
            simulate_asynchrony=False, asynchrony_start=15_000,
            asynchrony_duration=3_000, faults=0, nodes=4, workers=1,
-           rate=400, tx_size=512, duration=60, runs=1):
+           rate=400, tx_size=512, duration=30, runs=1):
     ''' Run benchmarks on AWS '''
     bench_params = _make_bench_params(
         workload=workload,
@@ -218,7 +218,7 @@ def remote(ctx, debug=True, execution='none', workload='erc20',
 def remote_attack(ctx, debug=True, execution='ordered', workload='erc20',
                   executor='sequential', artifacts='.', num_clusters=5,
                   families_per_cluster=5, people_per_family=8,
-                  order_stall_start=10_000, order_stall_duration=50_000,
+                  order_stall_start=10_000, order_stall_duration=15_000,
                   faults=0, nodes=4, workers=1, rate=400, tx_size=512,
                   duration=60, runs=1):
     ''' Run a deterministic consecutive order-stall benchmark on AWS '''

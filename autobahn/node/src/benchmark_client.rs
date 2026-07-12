@@ -115,9 +115,9 @@ impl Client {
             .context(format!("failed to connect to {}", self.target))?;
 
         // Submit all transactions.
-        let burst = self.rate / PRECISION;
         let mut tx = BytesMut::with_capacity(self.size);
         let mut counter = 0;
+        let mut rate_remainder = 0;
         let mut r = rand::thread_rng().gen();
         let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
         let interval = interval(Duration::from_millis(BURST_DURATION));
@@ -135,6 +135,13 @@ impl Client {
         'main: loop {
             interval.as_mut().tick().await;
             let now = Instant::now();
+
+            // Carry fractional transactions between ticks. A fixed
+            // `rate / PRECISION` burst becomes zero when a client's share is
+            // below 20 tx/s (for example, 100 tx/s across six clients).
+            rate_remainder += self.rate;
+            let burst = rate_remainder / PRECISION;
+            rate_remainder %= PRECISION;
 
             for x in 0..burst {
                 let bytes = if let Some(generator) = evm_generator.as_mut() {

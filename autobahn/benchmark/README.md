@@ -2,6 +2,23 @@
 
 This benchmark harness can run Autobahn locally with or without EVM execution enabled, collect per-node logs, and print an aggregate performance summary.
 
+## AWS Setup
+
+AWS is the default backend for remote evaluation. Before running a remote task:
+
+1. Install the benchmark dependencies with `pip install -r requirements.txt`.
+2. Replace the placeholders in `settings_aws.json` with the EC2 key-pair name,
+   local SSH private-key path, repository URL, and branch to evaluate.
+3. Configure AWS credentials through the standard boto3 credential chain, such
+   as `~/.aws/credentials`, environment variables, or an IAM role.
+
+The `instances.regions` list controls the AWS regions used by the testbed, and
+`instances.type` controls the EC2 instance type. The default SSH username is
+`ubuntu`, matching the Ubuntu AMI selected by the AWS instance manager.
+Run `fab install` after creating or replacing instances; it installs the native
+Rust build dependencies, including `pkg-config` and the OpenSSL development
+headers, on every remote node.
+
 ## Quick Start
 
 Run the benchmark from the `autobahn/benchmark` directory:
@@ -62,7 +79,7 @@ Run the same attack on the configured remote testbed:
 
 ```bash
 fab remote-attack --execution=speculative --workload=erc20 \
-    --order-stall-start=10000 --order-stall-duration=50000 \
+    --order-stall-start=10000 --order-stall-duration=15000 \
     --duration=60
 ```
 
@@ -118,10 +135,12 @@ The dedicated `fab attack` task enables `simulate_order_stall=True` automaticall
 - `order_stall_start=10000`
 - `order_stall_duration=50000`
 
-The dedicated `fab remote-attack` task has the same attack defaults as `fab attack`,
-but starts the benchmark through the configured remote testbed. It writes the
-retrieved remote logs and the parsed summary using the same remote benchmark
-pipeline as `fab remote`.
+The dedicated `fab remote-attack` task starts the benchmark through the
+configured remote testbed. It defaults to `order_stall_start=10000`,
+`order_stall_duration=15000`, and `duration=60`, leaving time before and after
+the stall to measure steady-state execution and recovery. It writes the
+retrieved remote logs and parsed summary through the same pipeline as
+`fab remote`.
 
 The benchmark configuration embedded in `fabfile.py` currently uses:
 

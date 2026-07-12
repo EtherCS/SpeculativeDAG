@@ -3,8 +3,9 @@
 /// This module provides ERC-20 contract functionality.
 pub mod contract;
 
-use contract::ERC20Token;
 use crate::{Bytecodes, ChainState, EvmAccount};
+use contract::ERC20Token;
+use rand::Rng;
 use revm::primitives::{uint, Address, TransactTo, TxEnv, U256};
 
 /// The maximum amount of gas that can be used for a transaction in this configuration.
@@ -82,20 +83,23 @@ pub fn generate_cluster(
     (state, bytecodes, txs)
 }
 
-
 /// Generates a cluster of blockchain transactions for testing or simulation purposes.
 pub fn generate_state_and_byte_code(
     num_families: usize,
     num_people_per_family: usize,
-    ) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
-
+    rng: &mut impl Rng,
+) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
     let families: Vec<Vec<Address>> = (0..num_families)
-        .map(|_| generate_addresses(num_people_per_family))
+        .map(|_| {
+            (0..num_people_per_family)
+                .map(|_| Address::new(rng.gen()))
+                .collect()
+        })
         .collect();
 
     let people_addresses: Vec<Address> = families.clone().into_iter().flatten().collect();
 
-    let gld_address = Address::new(rand::random());
+    let gld_address = Address::new(rng.gen());
 
     let gld_account = ERC20Token::new("Gold Token", "GLD", 18, 222_222_000_000_000_000_000_000u128)
         .add_balances(&people_addresses, uint!(1_000_000_000_000_000_000_U256))

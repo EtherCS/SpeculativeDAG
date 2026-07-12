@@ -40,6 +40,7 @@ use std::io::{self, BufRead, BufReader, BufWriter};
 use std::path::Path;
 use std::time::Duration as StdDuration;
 
+use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 use super::serialization::{deserializer, serializer};
@@ -204,6 +205,9 @@ impl PevmAPI {
     pub fn get_state_and_bytecode(
         workload_type: &WorkloadType,
     ) -> (InMemoryStorage, Vec<(AlloyAddress, Vec<Vec<AlloyAddress>>)>) {
+        // Workload genesis must be identical at every replica. Transaction
+        // generation remains random; only accounts and contracts are seeded.
+        let mut rng = StdRng::seed_from_u64(0x5350_4543_4441_4701);
         let mut addresses = Vec::new();
         let mut final_state = ChainState::default();
         let mut final_bytecodes = Bytecodes::default();
@@ -215,14 +219,17 @@ impl PevmAPI {
                 WorkloadType::ERC20(_, _, _) => erc20::generate_state_and_byte_code(
                     num_families_per_cluster,
                     num_people_per_family,
+                    &mut rng,
                 ),
                 WorkloadType::WETH(_, _, _) => weth::generate_state_and_byte_code(
                     num_families_per_cluster,
                     num_people_per_family,
+                    &mut rng,
                 ),
                 WorkloadType::Uniswap(_, _, _) => uniswap::generate_state_and_byte_code(
                     num_families_per_cluster,
                     num_people_per_family,
+                    &mut rng,
                 ),
             };
             final_state.extend(state);
@@ -288,15 +295,23 @@ pub fn ensure_workload_artifacts(
     account_storage_path: &str,
     account_addresses_path: &str,
 ) -> anyhow::Result<()> {
+    const ARTIFACT_VERSION: &str = "deterministic-genesis-v1\n";
+    let version_path = format!("{account_storage_path}.version");
+
     fn artifacts_are_valid(
         workload_type: &WorkloadType,
         account_storage_path: &str,
         account_addresses_path: &str,
+        version_path: &str,
     ) -> bool {
-        if !Path::new(account_storage_path).exists() || !Path::new(account_addresses_path).exists() {
+        if !Path::new(account_storage_path).exists() || !Path::new(account_addresses_path).exists()
+        {
             return false;
         }
-        load(account_storage_path).is_ok()
+        fs::read_to_string(version_path)
+            .map(|version| version == ARTIFACT_VERSION)
+            .unwrap_or(false)
+            && load(account_storage_path).is_ok()
             && load_addresses(account_addresses_path).is_ok()
             && match workload_type {
                 WorkloadType::ERC20(_, _, _)
@@ -305,7 +320,12 @@ pub fn ensure_workload_artifacts(
             }
     }
 
-    if artifacts_are_valid(workload_type, account_storage_path, account_addresses_path) {
+    if artifacts_are_valid(
+        workload_type,
+        account_storage_path,
+        account_addresses_path,
+        &version_path,
+    ) {
         return Ok(());
     }
 
@@ -318,7 +338,12 @@ pub fn ensure_workload_artifacts(
         {
             Ok(_) => break,
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                if artifacts_are_valid(workload_type, account_storage_path, account_addresses_path) {
+                if artifacts_are_valid(
+                    workload_type,
+                    account_storage_path,
+                    account_addresses_path,
+                    &version_path,
+                ) {
                     return Ok(());
                 }
                 thread::sleep(StdDuration::from_millis(50));
@@ -328,7 +353,12 @@ pub fn ensure_workload_artifacts(
     }
 
     let result = (|| -> anyhow::Result<()> {
-        if artifacts_are_valid(workload_type, account_storage_path, account_addresses_path) {
+        if artifacts_are_valid(
+            workload_type,
+            account_storage_path,
+            account_addresses_path,
+            &version_path,
+        ) {
             return Ok(());
         }
 
@@ -342,6 +372,7 @@ pub fn ensure_workload_artifacts(
         let (in_memory_storage, account_addresses) = PevmAPI::get_state_and_bytecode(workload_type);
         save_atomic(&in_memory_storage, account_storage_path)?;
         save_addresses_atomic(account_addresses_path, &account_addresses)?;
+        fs::write(&version_path, ARTIFACT_VERSION)?;
         Ok(())
     })();
 
@@ -349,10 +380,7 @@ pub fn ensure_workload_artifacts(
     result
 }
 
-pub fn remove_invalid_workload_artifacts(
-    account_storage_path: &str,
-    account_addresses_path: &str,
-) {
+pub fn remove_invalid_workload_artifacts(account_storage_path: &str, account_addresses_path: &str) {
     if load(account_storage_path).is_err() {
         let _ = fs::remove_file(account_storage_path);
     }

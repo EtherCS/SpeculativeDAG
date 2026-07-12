@@ -5,34 +5,36 @@ pub mod contract;
 use crate::erc20::contract::ERC20Token;
 use crate::{Bytecodes, ChainState, EvmAccount};
 use contract::{SingleSwap, SwapRouter, UniswapV3Factory, UniswapV3Pool, WETH9};
+use rand::Rng;
 use revm::primitives::{fixed_bytes, uint, Address, Bytes, B256, U256};
 
 pub fn generate_state_and_byte_code(
     num_families: usize,
     num_people_per_family: usize,
+    rng: &mut impl Rng,
 ) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
     let families: Vec<Vec<Address>> = (0..num_families)
         .map(|_| {
             (0..num_people_per_family)
-                .map(|_| Address::new(rand::random()))
+                .map(|_| Address::new(rng.gen()))
                 .collect()
         })
         .collect();
     let people_addresses: Vec<Address> = families.iter().flatten().copied().collect();
 
     let (dai_address, usdc_address) = {
-        let x = Address::new(rand::random());
-        let y = Address::new(rand::random());
+        let x = Address::new(rng.gen());
+        let y = Address::new(rng.gen());
         (std::cmp::min(x, y), std::cmp::max(x, y))
     };
 
-    let pool_init_code_hash = B256::new(rand::random());
-    let swap_router_address = Address::new(rand::random());
-    let single_swap_address = Address::new(rand::random());
-    let weth9_address = Address::new(rand::random());
-    let owner = Address::new(rand::random());
-    let factory_address = Address::new(rand::random());
-    let nonfungible_position_manager_address = Address::new(rand::random());
+    let pool_init_code_hash = B256::new(rng.gen());
+    let swap_router_address = Address::new(rng.gen());
+    let single_swap_address = Address::new(rng.gen());
+    let weth9_address = Address::new(rng.gen());
+    let owner = Address::new(rng.gen());
+    let factory_address = Address::new(rng.gen());
+    let nonfungible_position_manager_address = Address::new(rng.gen());
     let pool_address = UniswapV3Pool::new(dai_address, usdc_address, factory_address)
         .get_address(factory_address, pool_init_code_hash);
 

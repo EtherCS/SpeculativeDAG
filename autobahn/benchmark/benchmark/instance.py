@@ -17,8 +17,8 @@ class AWSError(Exception):
 
 
 class InstanceManager:
-    INSTANCE_NAME = 'dag-node'
-    SECURITY_GROUP_NAME = 'dag'
+    INSTANCE_NAME = 'pufferfish-autobahn'
+    SECURITY_GROUP_NAME = 'pufferfish'
 
     def __init__(self, settings):
         assert isinstance(settings, Settings)
@@ -28,7 +28,7 @@ class InstanceManager:
             self.clients[region] = boto3.client('ec2', region_name=region)
 
     @classmethod
-    def make(cls, settings_file='settings.json'):
+    def make(cls, settings_file='settings_aws.json'):
         try:
             return cls(Settings.load(settings_file))
         except SettingsError as e:
@@ -106,14 +106,58 @@ class InstanceManager:
         )
 
     def _get_ami(self, client):
-        # The AMI changes with regions.
-        response = client.describe_images(
-            Filters=[{
-                'Name': 'description',
-                'Values': ['Canonical, Ubuntu, 20.04 LTS, amd64 focal image build on 2020-10-26']
-            }]
+        instance_types = client.describe_instance_types(
+            InstanceTypes=[self.settings.instance_type]
         )
-        return response['Images'][0]['ImageId']
+        descriptions = instance_types.get('InstanceTypes', [])
+        if not descriptions:
+            raise BenchError(
+                f'Instance type {self.settings.instance_type} is unavailable '
+                'in one of the configured AWS regions'
+            )
+
+        architectures = descriptions[0]['ProcessorInfo']['SupportedArchitectures']
+        architecture = next(
+            (value for value in ('arm64', 'x86_64') if value in architectures),
+            None,
+        )
+        if architecture is None:
+            raise BenchError(
+                f'Unsupported architecture for {self.settings.instance_type}: '
+                f'{architectures}'
+            )
+
+        # Canonical uses "amd64" in AMI names and "x86_64" in EC2 metadata.
+        ubuntu_architecture = 'amd64' if architecture == 'x86_64' else 'arm64'
+        response = client.describe_images(
+            Owners=['099720109477'],
+            Filters=[
+                {
+                    'Name': 'name',
+                    'Values': [
+                        'ubuntu/images/hvm-ssd/'
+                        f'ubuntu-jammy-22.04-{ubuntu_architecture}-server-*'
+                    ],
+                },
+                {'Name': 'architecture', 'Values': [architecture]},
+                {'Name': 'state', 'Values': ['available']},
+                {'Name': 'root-device-type', 'Values': ['ebs']},
+                {'Name': 'virtualization-type', 'Values': ['hvm']},
+            ],
+        )
+        images = response.get('Images', [])
+        if not images:
+            raise BenchError(
+                f'No official Ubuntu 22.04 {architecture} AMI is available '
+                'in one of the configured AWS regions'
+            )
+
+        image = max(images, key=lambda value: value['CreationDate'])
+        Print.info(
+            f"Using {image['ImageId']} ({image['Name']}) for "
+            f'{self.settings.instance_type}'
+        )
+        return image['ImageId']
 
     def create_instances(self, instances):
         assert isinstance(instances, int) and instances > 0

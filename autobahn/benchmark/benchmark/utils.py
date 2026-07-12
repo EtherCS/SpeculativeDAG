@@ -51,6 +51,17 @@ class PathMaker:
         return PathMaker._logs_path
 
     @staticmethod
+    def benchmark_logs_path(
+        faults, nodes, rate, execution, workload, executor, experiment,
+        timestamp
+    ):
+        name = (
+            f'bench-{faults}-{nodes}-{rate}-{execution}-{workload}-'
+            f'{executor}-{experiment}-{timestamp}'
+        )
+        return join('logs', name)
+
+    @staticmethod
     def primary_log_file(i):
         assert isinstance(i, int) and i >= 0
         return join(PathMaker.logs_path(), f'primary-{i}.log')
@@ -72,10 +83,13 @@ class PathMaker:
         return 'results'
 
     @staticmethod
-    def result_file(faults, nodes, workers, collocate, rate, tx_size):
+    def result_file(
+        faults, nodes, rate, execution, workload, executor, experiment
+    ):
         return join(
             PathMaker.results_path(),
-            f'bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+            f'bench-{faults}-{nodes}-{rate}-{execution}-{workload}-'
+            f'{executor}-{experiment}.txt'
         )
 
     @staticmethod

@@ -4,8 +4,8 @@ use crypto::{Digest, PublicKey};
 use ethers::types::Address;
 use log::{debug, info, warn};
 use pevm::api::{
-    ensure_workload_artifacts, remove_invalid_workload_artifacts, ExecutionMode as PevmExecutionMode,
-    EvmStateWriteSet, PevmExecutor, TransactionWithHint, WorkloadType,
+    ensure_workload_artifacts, remove_invalid_workload_artifacts, EvmStateWriteSet,
+    ExecutionMode as PevmExecutionMode, PevmExecutor, TransactionWithHint, WorkloadType,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -115,7 +115,11 @@ pub(crate) struct ExecutionService {
 }
 
 impl ExecutionService {
-    pub(crate) fn spawn(parameters: &Parameters, store: Store, rx_execution: Receiver<ExecutionRequest>) {
+    pub(crate) fn spawn(
+        parameters: &Parameters,
+        store: Store,
+        rx_execution: Receiver<ExecutionRequest>,
+    ) {
         let config = match ExecutionConfig::from_parameters(parameters) {
             Ok(Some(config)) => config,
             Ok(None) => return,
@@ -174,7 +178,7 @@ impl ExecutionService {
                     if self.config.strategy == ExecutionStrategy::SpeculativeAllCommit {
                         if let Err(error) = self.execute_speculative_header(&header).await {
                             warn!(
-                                "Speculative EVM execution failed for header {} at height {}: {}",
+                                "Speculative EVM execution failed for header {} at height {}: {:?}",
                                 header.id, header.height, error
                             );
                         }
@@ -207,7 +211,7 @@ impl ExecutionService {
                 Ok(()) => self.advance_committed_state(),
                 Err(error) => {
                     warn!(
-                        "Committed EVM execution failed for header {} at height {}: {}",
+                        "Committed EVM execution failed for header {} at height {}: {:?}",
                         next_header.id, next_header.height, error
                     );
                 }
@@ -277,10 +281,8 @@ impl ExecutionService {
             txs.len()
         );
         let write_set = speculative_executor.speculative_execute(txs, EvmStateWriteSet::default());
-        self.speculative_results.insert(
-            header.id.clone(),
-            (self.committed_state_version, write_set),
-        );
+        self.speculative_results
+            .insert(header.id.clone(), (self.committed_state_version, write_set));
         Ok(())
     }
 
