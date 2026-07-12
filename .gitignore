@@ -9,6 +9,8 @@ pevm/target/*
 pevm/crates/pevm/target/*
 mysticeti/logs/*
 
+autobahn/
+
 **.ansi
 **-validator*
 
