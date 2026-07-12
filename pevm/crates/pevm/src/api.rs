@@ -612,19 +612,20 @@ impl PevmTransactionGenerator {
         const GAS_LIMIT: u64 = 35_000;
         let mut transactions = Vec::new();
 
-        let num_people_per_family = match self.workload_type {
-            WorkloadType::ERC20(_, _, num_people_per_family)
-            | WorkloadType::WETH(_, _, num_people_per_family)
-            | WorkloadType::Uniswap(_, _, num_people_per_family) => num_people_per_family,
-        };
+        let (_, num_families_per_cluster, num_people_per_family) =
+            self.workload_type.dimensions();
 
-        for counter in 0..num_people_per_family {
-            if counter % self.replica_num as usize != self.replica_id as usize {
-                continue; // Each member sends transaction once every 4 iterations
-            }
-            for (gld_address, families) in &self.clusters {
-                for family in families {
-                    let member = family[counter];
+        for (cluster_id, (gld_address, families)) in self.clusters.iter().enumerate() {
+            for (family_id, family) in families.iter().enumerate() {
+                for (member_id, member) in family.iter().copied().enumerate() {
+                    let global_member_id = (cluster_id * num_families_per_cluster + family_id)
+                        * num_people_per_family
+                        + member_id;
+                    if global_member_id % self.replica_num as usize
+                        != self.replica_id as usize
+                    {
+                        continue;
+                    }
                     let recipient = family[(rand::random::<usize>()) % (family.len())];
                     let calldata =
                         ERC20Token::transfer(recipient, U256::from(rand::random::<u8>()));
@@ -681,15 +682,21 @@ impl PevmTransactionGenerator {
             })
             .collect();
 
+        let (_, num_families_per_cluster, num_people_per_family) =
+            self.workload_type.dimensions();
+
         loop {
+            let mut generated_in_pass = 0;
             for (index, cluster_id) in three_random_clusters.iter().enumerate() {
                 let (gld_address, families) = &self.clusters[*cluster_id];
-                let family = &families[three_random_families[index]];
-                let mut counter = 0;
-                for member in family {
-                    if counter % self.replica_num != self.replica_id {
-                        counter += 1;
-                        continue; // Each member sends transaction once every 4 iterations
+                let family_id = three_random_families[index];
+                let family = &families[family_id];
+                for (member_id, member) in family.iter().enumerate() {
+                    let global_member_id = (*cluster_id * num_families_per_cluster + family_id)
+                        * num_people_per_family
+                        + member_id;
+                    if global_member_id as u64 % self.replica_num != self.replica_id {
+                        continue;
                     }
                     let recipient = family[(rand::random::<usize>()) % (family.len())];
                     let calldata =
@@ -704,7 +711,7 @@ impl PevmTransactionGenerator {
                         chain_id: Some(1),
                         ..TxEnv::default()
                     });
-                    counter += 1;
+                    generated_in_pass += 1;
                     self.nonce_map
                         .entry(*member)
                         .and_modify(|n| *n += 1)
@@ -714,6 +721,9 @@ impl PevmTransactionGenerator {
                         return hex_codes;
                     }
                 }
+            }
+            if generated_in_pass == 0 {
+                return self.generate_parallelizable_erc20_transactions();
             }
         }
         Vec::new()

@@ -285,6 +285,7 @@ impl HeaderWaiter {
                             //let header_id = header.id.clone();
                             let height = header.height();
                             let author = header.author;
+                            let is_commit = matches!(consensus_message, ConsensusMessage::Commit { .. });
                             let id = proposal_digest(&consensus_message);
                             //println!("syncing proposals in header waiter");
 
@@ -321,13 +322,24 @@ impl HeaderWaiter {
                                 });
                             }
                             if !requires_sync.is_empty() {
-                                let address = self.committee
-                                    .primary(&author)
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
                                 let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
                                 let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
+                                if is_commit {
+                                    // The header accompanying a commit is only a local placeholder,
+                                    // so its author is not a reliable source for every proposal.
+                                    let addresses = self.committee
+                                        .others_primaries(&self.name)
+                                        .iter()
+                                        .map(|(_, authority)| authority.primary_to_primary)
+                                        .collect();
+                                    self.network.broadcast(addresses, Bytes::from(bytes)).await;
+                                } else {
+                                    let address = self.committee
+                                        .primary(&author)
+                                        .expect("Author of valid header not in the committee")
+                                        .primary_to_primary;
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                }
                             }
                         }
                     }

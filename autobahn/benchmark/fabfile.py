@@ -57,7 +57,8 @@ def _make_node_params(execution='none', workload='erc20', executor='sequential',
         'use_parallel_proposals': True,
         'k': 4,
         'use_fast_path': True,
-        'fast_path_timeout': 5_000,
+        # Leave enough time for the slow Confirm/Commit path before view timeout.
+        'fast_path_timeout': 1_000,
         'use_ride_share': False,
         'car_timeout': 5_000,
 

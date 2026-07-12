@@ -108,6 +108,8 @@ pub struct Core {
     // cqc_makers: HashMap<(Slot, View), QCMaker>,
     current_qcs_formed: usize,
     tc_makers: HashMap<(Slot, View), TCMaker>,
+    timeout_authors: HashMap<(Slot, View), HashSet<PublicKey>>,
+    sent_timeouts: HashSet<(Slot, View)>,
     prepare_tickets: VecDeque<ConsensusMessage>,
     already_proposed_slots: HashSet<Slot>,
     tx_info: Sender<ConsensusMessage>,
@@ -231,6 +233,8 @@ impl Core {
                 // pqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 // cqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 tc_makers: HashMap::with_capacity(2 * gc_depth as usize),
+                timeout_authors: HashMap::new(),
+                sent_timeouts: HashSet::new(),
                 prepare_tickets: VecDeque::with_capacity(2 * gc_depth as usize),
                 timeout_delay,
                 timer_futures: FuturesUnordered::new(),
@@ -969,6 +973,7 @@ impl Core {
 
         debug!("Send req for Consensus message {}", consensus_message);
 
+        let is_commit = matches!(consensus_message, ConsensusMessage::Commit { .. });
         let consensus_req = ConsensusRequest::new(self.name, consensus_message, &mut self.signature_service).await;
 
         //send to all others
@@ -981,10 +986,21 @@ impl Core {
         let message = bincode::serialize(&PrimaryMessage::ConsensusRequest(consensus_req.clone())).expect("Failed to serialize timeout message");
         let handlers = self.network.broadcast(addresses, Bytes::from(message)).await;
 
-        self.cancel_handlers
-            .entry(self.current_header.height())
-            .or_insert_with(Vec::new)
-            .extend(handlers);
+        if is_commit {
+            // A local commit immediately runs slot GC. Keep these ACK receivers
+            // alive independently so it cannot cancel delivery to replicas that
+            // are catching up after a stall.
+            tokio::spawn(async move {
+                for handler in handlers {
+                    let _ = handler.await;
+                }
+            });
+        } else {
+            self.cancel_handlers
+                .entry(self.current_header.height())
+                .or_insert_with(Vec::new)
+                .extend(handlers);
+        }
 
         //process oneself
         self.process_consensus_request(consensus_req).await?;
@@ -1478,11 +1494,17 @@ impl Core {
                 // TODO:Can implement different forwarding methods (can be random, can forward to f+1, current one is the most pessimisstic)
               
                 if self.k > 1 { //check whether a) we have already committed; and if not b) whether ticket is ready (prepare and QC)
-                    if !self.committed_slots.contains_key(&(slot+1)) && !self.timers.contains(&(slot + 1, 1)) && self.committed_slots.contains_key(&(slot+1 - self.k))  { 
-                        debug!("start timer for slot {}", slot +1);
-                        let timer = Timer::new(slot + 1, 1, self.timeout_delay);
+                    let next_slot = slot + 1;
+                    let within_open_slot_bound = next_slot <= self.k
+                        || self.committed_slots.contains_key(&(next_slot - self.k));
+                    if !self.committed_slots.contains_key(&next_slot)
+                        && !self.timers.contains(&(next_slot, 1))
+                        && within_open_slot_bound
+                    {
+                        debug!("start timer for slot {}", next_slot);
+                        let timer = Timer::new(next_slot, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
-                        self.timers.insert((slot + 1, 1));
+                        self.timers.insert((next_slot, 1));
                     }
                 }
 
@@ -1784,6 +1806,10 @@ impl Core {
             None => {},
         };
 
+        if !self.sent_timeouts.insert((slot, view)) {
+            return Ok(())
+        }
+
         debug!("Sending Timeout for slot {}, view {}", slot, view);
         // Make a timeout message.for the slot, view, containing the highest QC this replica has
         // seen
@@ -1822,6 +1848,7 @@ impl Core {
         self.handle_timeout(&timeout).await
     }
 
+    #[async_recursion]
     async fn handle_timeout(&mut self, timeout: &Timeout) -> DagResult<()> {
         debug!("Processing timeout {:?}", timeout);
 
@@ -1844,6 +1871,25 @@ impl Core {
 
         // Ensure the timeout is well formed.
         timeout.verify(&self.committee)?;
+
+        // Join a view change after observing f+1 timeout stake. Without this,
+        // replicas that drift into adjacent views during a long stall may never
+        // collect a timeout certificate in the same view after recovery.
+        let timeout_key = (timeout.slot, timeout.view);
+        let authors = self.timeout_authors.entry(timeout_key).or_default();
+        authors.insert(timeout.author);
+        let observed_authors: Vec<_> = authors.iter().copied().collect();
+        let observed_stake: Stake = observed_authors
+            .iter()
+            .map(|author| self.committee.stake(author))
+            .sum();
+        if observed_stake >= self.committee.validity_threshold()
+            && !self.sent_timeouts.contains(&timeout_key)
+        {
+            self.views.insert(timeout.slot, timeout.view);
+            self.timers.insert(timeout_key);
+            self.local_timeout_round(timeout.slot, timeout.view).await?;
+        }
 
         // If we haven't seen a timeout for this slot, view, then create a new TC maker for it.
         if self.tc_makers.get(&(timeout.slot, timeout.view)).is_none() {
@@ -2201,18 +2247,12 @@ impl Core {
                 Some(()) = self.order_stall_timer_futures.next() => {
                     let delayed_prepares = std::mem::take(&mut self.order_stall_delayed_prepares);
                     for (slot, delayed_prepare) in delayed_prepares {
-                        let still_relevant = match &delayed_prepare {
-                            ConsensusMessage::Prepare { view, .. } => {
-                                *view == self.views.get(&slot).copied().unwrap_or_default()
-                            }
-                            _ => false,
-                        };
-                        if still_relevant {
-                            debug!("Order-stall attack ended: releasing Prepare for slot {}", slot);
-                            let _ = self.send_consensus_req(delayed_prepare).await;
-                        } else {
-                            debug!("Order-stall attack ended: dropping stale Prepare for slot {}", slot);
-                        }
+                        // Release the latest prepare retained by this leader even if a
+                        // local timeout raced with stall expiry. Receivers still verify
+                        // the TC and view, so stale prepares are safely ignored while a
+                        // higher valid prepare can synchronize lagging replicas.
+                        debug!("Order-stall attack ended: releasing Prepare for slot {}", slot);
+                        let _ = self.send_consensus_req(delayed_prepare).await;
                     }
                     Ok(())
                 },

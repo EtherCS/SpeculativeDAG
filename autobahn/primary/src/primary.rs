@@ -20,7 +20,7 @@ use bytes::Bytes;
 use config::{Committee, Parameters, WorkerId};
 use crypto::{Digest, PublicKey, SignatureService};
 use futures::sink::SinkExt as _;
-use log::info;
+use log::{info, warn};
 use network::{MessageHandler, Receiver as NetworkReceiver, Writer};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -181,6 +181,19 @@ impl Primary {
         // use_ride_share: bool,
         // car_timeout: u64,
 
+        let fast_path_timeout = if parameters.use_fast_path
+            && parameters.fast_path_timeout >= parameters.timeout_delay
+        {
+            let adjusted = (parameters.timeout_delay / 2).max(1);
+            warn!(
+                "Fast-path timeout {} ms must be shorter than view timeout {} ms; using {} ms",
+                parameters.fast_path_timeout, parameters.timeout_delay, adjusted
+            );
+            adjusted
+        } else {
+            parameters.fast_path_timeout
+        };
+
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(
             name,
@@ -205,7 +218,7 @@ impl Primary {
             parameters.use_parallel_proposals,
             parameters.k,
             parameters.use_fast_path,
-            parameters.fast_path_timeout,
+            fast_path_timeout,
             parameters.use_ride_share,
             parameters.car_timeout,
             parameters.simulate_asynchrony,
