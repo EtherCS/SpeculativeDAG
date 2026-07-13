@@ -5,34 +5,56 @@ pub mod contract;
 use crate::erc20::contract::ERC20Token;
 use crate::{Bytecodes, ChainState, EvmAccount};
 use contract::{SingleSwap, SwapRouter, UniswapV3Factory, UniswapV3Pool, WETH9};
+use rand::{rngs::StdRng, RngCore, SeedableRng};
 use revm::primitives::{fixed_bytes, uint, Address, Bytes, B256, U256};
+
+fn deterministic_address(rng: &mut StdRng) -> Address {
+    let mut bytes = [0u8; 20];
+    rng.fill_bytes(&mut bytes);
+    Address::new(bytes)
+}
+
+fn deterministic_b256(rng: &mut StdRng) -> B256 {
+    let mut bytes = [0u8; 32];
+    rng.fill_bytes(&mut bytes);
+    B256::new(bytes)
+}
 
 pub fn generate_state_and_byte_code(
     num_families: usize,
     num_people_per_family: usize,
 ) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
+    generate_state_and_byte_code_with_seed(num_families, num_people_per_family, 0x554e_4953_5741_50)
+}
+
+pub fn generate_state_and_byte_code_with_seed(
+    num_families: usize,
+    num_people_per_family: usize,
+    seed: u64,
+) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
+    let mut rng = StdRng::seed_from_u64(seed);
     let families: Vec<Vec<Address>> = (0..num_families)
         .map(|_| {
             (0..num_people_per_family)
-                .map(|_| Address::new(rand::random()))
+                .map(|_| deterministic_address(&mut rng))
                 .collect()
         })
         .collect();
     let people_addresses: Vec<Address> = families.iter().flatten().copied().collect();
 
     let (dai_address, usdc_address) = {
-        let x = Address::new(rand::random());
-        let y = Address::new(rand::random());
+        let x = deterministic_address(&mut rng);
+        let y = deterministic_address(&mut rng);
         (std::cmp::min(x, y), std::cmp::max(x, y))
     };
 
-    let pool_init_code_hash = B256::new(rand::random());
-    let swap_router_address = Address::new(rand::random());
-    let single_swap_address = Address::new(rand::random());
-    let weth9_address = Address::new(rand::random());
-    let owner = Address::new(rand::random());
-    let factory_address = Address::new(rand::random());
-    let nonfungible_position_manager_address = Address::new(rand::random());
+    let pool_init_code_hash = deterministic_b256(&mut rng);
+    let swap_router_address = deterministic_address(&mut rng);
+    let single_swap_address = deterministic_address(&mut rng);
+    let weth9_address = deterministic_address(&mut rng);
+    let owner = deterministic_address(&mut rng);
+    let factory_address = deterministic_address(&mut rng);
+    let nonfungible_position_manager_address = deterministic_address(&mut rng);
     let pool_address = UniswapV3Pool::new(dai_address, usdc_address, factory_address)
         .get_address(factory_address, pool_init_code_hash);
 

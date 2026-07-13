@@ -3,8 +3,9 @@
 /// This module provides ERC-20 contract functionality.
 pub mod contract;
 
-use contract::ERC20Token;
 use crate::{Bytecodes, ChainState, EvmAccount};
+use contract::ERC20Token;
+use rand::{rngs::StdRng, RngCore, SeedableRng};
 use revm::primitives::{uint, Address, TransactTo, TxEnv, U256};
 
 /// The maximum amount of gas that can be used for a transaction in this configuration.
@@ -19,6 +20,12 @@ pub const ESTIMATED_GAS_USED: u64 = 29_738;
 /// for independent benchmarks.
 fn generate_addresses(length: usize) -> Vec<Address> {
     (0..length).map(|_| Address::new(rand::random())).collect()
+}
+
+fn deterministic_address(rng: &mut StdRng) -> Address {
+    let mut bytes = [0u8; 20];
+    rng.fill_bytes(&mut bytes);
+    Address::new(bytes)
 }
 
 /// Generates a cluster of blockchain transactions for testing or simulation purposes.
@@ -82,20 +89,32 @@ pub fn generate_cluster(
     (state, bytecodes, txs)
 }
 
-
 /// Generates a cluster of blockchain transactions for testing or simulation purposes.
 pub fn generate_state_and_byte_code(
     num_families: usize,
     num_people_per_family: usize,
-    ) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
+) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
+    generate_state_and_byte_code_with_seed(num_families, num_people_per_family, 0x4552_4332_30)
+}
+
+pub fn generate_state_and_byte_code_with_seed(
+    num_families: usize,
+    num_people_per_family: usize,
+    seed: u64,
+) -> (ChainState, Bytecodes, Address, Vec<Vec<Address>>) {
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let families: Vec<Vec<Address>> = (0..num_families)
-        .map(|_| generate_addresses(num_people_per_family))
+        .map(|_| {
+            (0..num_people_per_family)
+                .map(|_| deterministic_address(&mut rng))
+                .collect()
+        })
         .collect();
 
     let people_addresses: Vec<Address> = families.clone().into_iter().flatten().collect();
 
-    let gld_address = Address::new(rand::random());
+    let gld_address = deterministic_address(&mut rng);
 
     let gld_account = ERC20Token::new("Gold Token", "GLD", 18, 222_222_000_000_000_000_000_000u128)
         .add_balances(&people_addresses, uint!(1_000_000_000_000_000_000_U256))

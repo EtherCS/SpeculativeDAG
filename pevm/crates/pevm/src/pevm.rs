@@ -496,11 +496,12 @@ pub fn speculative_execute_revm_sequential<S: Storage, C: PevmChain>(
 
         let result_and_state = match evm.transact() {
             Ok(result) => result,
-            Err(_) => {
+            Err(error) => {
                 tracing::error!(
                     tx_index,
                     ?caller,
                     ?nonce,
+                    %error,
                     "Speculative EVM execution stopped at an invalid transaction"
                 );
                 break;

@@ -210,19 +210,28 @@ impl PevmAPI {
         final_state.insert(AlloyAddress::ZERO, EvmAccount::default()); // Beneficiary
         let (num_clusters, num_families_per_cluster, num_people_per_family) =
             workload_type.dimensions();
-        for _ in 0..num_clusters {
+        for cluster_index in 0..num_clusters {
+            // Every remote replica must independently materialize identical genesis artifacts.
+            let seed = match workload_type {
+                WorkloadType::ERC20(_, _, _) => 0x4552_4332_30,
+                WorkloadType::WETH(_, _, _) => 0x5745_5448,
+                WorkloadType::Uniswap(_, _, _) => 0x554e_4953_5741_50,
+            } ^ (cluster_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
             let (state, bytecodes, contract_address, families) = match workload_type {
-                WorkloadType::ERC20(_, _, _) => erc20::generate_state_and_byte_code(
+                WorkloadType::ERC20(_, _, _) => erc20::generate_state_and_byte_code_with_seed(
                     num_families_per_cluster,
                     num_people_per_family,
+                    seed,
                 ),
-                WorkloadType::WETH(_, _, _) => weth::generate_state_and_byte_code(
+                WorkloadType::WETH(_, _, _) => weth::generate_state_and_byte_code_with_seed(
                     num_families_per_cluster,
                     num_people_per_family,
+                    seed,
                 ),
-                WorkloadType::Uniswap(_, _, _) => uniswap::generate_state_and_byte_code(
+                WorkloadType::Uniswap(_, _, _) => uniswap::generate_state_and_byte_code_with_seed(
                     num_families_per_cluster,
                     num_people_per_family,
+                    seed,
                 ),
             };
             final_state.extend(state);
@@ -280,6 +289,24 @@ impl WorkloadType {
                 format!("account_addresses_uniswap_{}_{}_{}.bin", a, b, c),
             ),
         }
+    }
+}
+
+#[test]
+fn workload_state_generation_is_deterministic() {
+    let workloads = [
+        WorkloadType::ERC20(2, 2, 3),
+        WorkloadType::WETH(2, 2, 3),
+        WorkloadType::Uniswap(2, 2, 3),
+    ];
+
+    for workload in workloads {
+        let (first_state, first_addresses) = PevmAPI::get_state_and_bytecode(&workload);
+        let (second_state, second_addresses) = PevmAPI::get_state_and_bytecode(&workload);
+
+        assert_eq!(first_state, second_state);
+        assert_eq!(first_addresses, second_addresses);
+        assert_ne!(first_addresses[0].0, first_addresses[1].0);
     }
 }
 
@@ -1292,7 +1319,8 @@ impl PevmScheduler {
 
 #[test]
 pub fn store_in_memory_storage() {
-    let (in_memory_storage, _account_addresses) = PevmAPI::get_erc20_state_and_bytecode(1, 2, 3);
+    let workload_type = WorkloadType::ERC20(1, 2, 3);
+    let (in_memory_storage, _account_addresses) = PevmAPI::get_state_and_bytecode(&workload_type);
     // Save
     save(&in_memory_storage, "storage.json");
 
@@ -1304,7 +1332,8 @@ pub fn store_in_memory_storage() {
 #[test]
 
 pub fn store_account_address() {
-    let (in_memory_storage, account_addresses) = PevmAPI::get_erc20_state_and_bytecode(1, 2, 3);
+    let workload_type = WorkloadType::ERC20(1, 2, 3);
+    let (_in_memory_storage, account_addresses) = PevmAPI::get_state_and_bytecode(&workload_type);
     // Save
     save_addresses("account_addresses.bin", &account_addresses);
     println!("Saved account addresses: {:?}", account_addresses);
@@ -1316,9 +1345,8 @@ pub fn store_account_address() {
 
 #[test]
 pub fn store_and_load_both() {
-    let (in_memory_storage, account_addresses) = PevmAPI::get_erc20_state_and_bytecode(8, 1, 8);
-
     let workload_type = WorkloadType::ERC20(8, 1, 8);
+    let (in_memory_storage, account_addresses) = PevmAPI::get_state_and_bytecode(&workload_type);
 
     let a1 = 8;
     let a2 = 1;
