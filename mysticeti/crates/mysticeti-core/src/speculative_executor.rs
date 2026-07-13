@@ -19,6 +19,7 @@ use crate::{
 };
 
 const SNAPSHOT_WINDOW: usize = 20; // the maximum number of temporary snapshots
+const EXECUTION_BATCH_SIZE: usize = SNAPSHOT_WINDOW;
 
 pub enum SpeculativeMessageStatus {
     Speculative, // This is a speculative order
@@ -81,16 +82,41 @@ impl SpeculativeExecutor {
 
     pub async fn run(&mut self) {
         // Core sends only newly predicted sub-DAGs, so every speculative message is
-        // an incremental state transition. Process the channel in FIFO order: replacing
-        // queued speculative messages would create gaps in the executed prefix.
-        while let Some(speculative_message) = self.speculative_message_receiver.recv().await {
+        // an incremental state transition. Preserve FIFO order, but coalesce adjacent
+        // speculative messages to avoid one blocking task and mutex acquisition per leader.
+        let mut pending_message = None;
+        loop {
+            let speculative_message = match pending_message.take() {
+                Some(message) => message,
+                None => match self.speculative_message_receiver.recv().await {
+                    Some(message) => message,
+                    None => break,
+                },
+            };
+
             match speculative_message {
                 SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => match flag {
                     SpeculativeMessageStatus::Consensus => {
                         self.handle_consensus_message(aps_tree, sub_dags).await;
                     }
                     SpeculativeMessageStatus::Speculative => {
-                        self.handle_speculative_message(sub_dags).await;
+                        let mut batched_sub_dags = sub_dags;
+                        loop {
+                            match self.speculative_message_receiver.try_recv() {
+                                Ok(SpeculativeMessage::ExecuteTxs(
+                                    _,
+                                    mut next_sub_dags,
+                                    SpeculativeMessageStatus::Speculative,
+                                )) => batched_sub_dags.append(&mut next_sub_dags),
+                                Ok(message) => {
+                                    pending_message = Some(message);
+                                    break;
+                                }
+                                Err(mpsc::error::TryRecvError::Empty) => break,
+                                Err(mpsc::error::TryRecvError::Disconnected) => break,
+                            }
+                        }
+                        self.handle_speculative_message(batched_sub_dags).await;
                     }
                 },
                 SpeculativeMessage::OtherMessage => {
@@ -170,9 +196,16 @@ impl SpeculativeExecutor {
                     for statement in block.statements() {
                         if let BaseStatement::Share(share) = statement {
                             let creation_time = TransactionGenerator::extract_timestamp(share);
+                            let latency = current_timestamp.saturating_sub(creation_time);
+                            metrics.transaction_committed_latency.observe(latency);
                             metrics
-                                .transaction_committed_latency
-                                .observe(current_timestamp.saturating_sub(creation_time));
+                                .latency_s
+                                .with_label_values(&["shared"])
+                                .observe(latency.as_secs_f64());
+                            metrics
+                                .latency_squared_s
+                                .with_label_values(&["shared"])
+                                .inc_by(latency.as_secs_f64().powi(2));
                         }
                     }
                 }
@@ -253,86 +286,101 @@ impl SpeculativeExecutor {
                 EvmStateWriteSet::default(), // Empty initial state
             )
         });
-        let mut new_state = last_executed_snapshot.transition_states.clone();
+        let mut current_state = last_executed_snapshot.transition_states.clone();
         let mut new_ordered_leaders = last_executed_snapshot.ordered_leaders.clone();
 
-        // Clone executor Arc once outside the loop
-        let executor = Arc::clone(&self.pevm_executor);
-
-        for (idx, sub_dag) in sub_dags.iter().enumerate() {
-            if idx > 0 && idx % 5 == 0 {
-                tokio::task::yield_now().await;
-            }
-
-            if self.should_take_snapshot(sub_dag.anchor.authority) {
-                self.record_snapshot("pre_exec");
-                self.snapshots.push(SpeculativeExecutionSnapshot::new(
-                    new_ordered_leaders.clone(),
-                    new_state.clone(),
-                ));
-            }
-
-            let mut txs = Vec::<(String, Address)>::new();
-            let block_count = sub_dag.blocks.len();
-
-            for block in &sub_dag.blocks {
-                for statement in block.statements() {
-                    if let BaseStatement::Share(share) = statement {
-                        let (raw_hex, caller) = decode_share_base_statement(share.data());
-                        txs.push((raw_hex, caller));
-                    }
-                }
-            }
-
-            let start_execution_time = std::time::Instant::now();
-
-            // Execute in spawn_blocking to avoid blocking the async runtime
-            let exec_ref = Arc::clone(&executor);
-            new_state = tokio::task::spawn_blocking(move || {
-                let mut exec = exec_ref.lock().unwrap();
-                exec.speculative_execute(txs, new_state)
+        for sub_dag_batch in sub_dags.chunks(EXECUTION_BATCH_SIZE) {
+            let reputation_snapshots = sub_dag_batch
+                .iter()
+                .map(|sub_dag| self.should_take_snapshot(sub_dag.anchor.authority))
+                .collect::<Vec<_>>();
+            let execution_batches = sub_dag_batch
+                .iter()
+                .map(Self::execution_batch)
+                .collect::<Vec<_>>();
+            let executor = Arc::clone(&self.pevm_executor);
+            let mut execution_state = current_state.clone();
+            let execution_results = tokio::task::spawn_blocking(move || {
+                let mut exec = executor.lock().unwrap();
+                execution_batches
+                    .into_iter()
+                    .map(|(txs, block_count)| {
+                        let start = std::time::Instant::now();
+                        execution_state =
+                            exec.speculative_execute(txs, std::mem::take(&mut execution_state));
+                        (execution_state.clone(), start.elapsed(), block_count)
+                    })
+                    .collect::<Vec<_>>()
             })
             .await
             .expect("Execution task failed");
 
-            let end_execution_time = start_execution_time.elapsed();
+            for ((sub_dag, take_reputation_snapshot), (state, elapsed, block_count)) in
+                sub_dag_batch
+                    .iter()
+                    .zip(reputation_snapshots)
+                    .zip(execution_results)
+            {
+                if take_reputation_snapshot {
+                    self.record_snapshot("pre_exec");
+                    self.snapshots.push(SpeculativeExecutionSnapshot::new(
+                        new_ordered_leaders.clone(),
+                        current_state.clone(),
+                    ));
+                }
+                current_state = state;
 
-            // Record the average block execution time
-            if block_count > 0 {
+                // Record the average block execution time
+                if block_count > 0 {
+                    self.metrics
+                        .block_execution_latency
+                        .observe(elapsed / block_count as u32);
+                }
                 self.metrics
-                    .block_execution_latency
-                    .observe(end_execution_time / block_count as u32);
-            }
-            self.metrics
-                .speculative_execution_leaders_total
-                .with_label_values(&["speculative"])
-                .inc();
+                    .speculative_execution_leaders_total
+                    .with_label_values(&["speculative"])
+                    .inc();
 
-            new_ordered_leaders.push(sub_dag.anchor);
+                new_ordered_leaders.push(sub_dag.anchor);
 
-            // we take snapshot after speculative execution if the next leader is likely correct
-            if self.snapshot_policy != SpeculationSnapshotPolicy::None {
-                if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
-                    self.snapshot_window.pop_front();
+                // Keep the recent per-leader states needed for direct commitment.
+                if self.snapshot_policy != SpeculationSnapshotPolicy::None {
+                    if self.snapshot_window.len() >= SNAPSHOT_WINDOW {
+                        self.snapshot_window.pop_front();
+                    }
+                    self.snapshot_window
+                        .push_back(SpeculativeExecutionSnapshot::new(
+                            new_ordered_leaders.clone(),
+                            current_state.clone(),
+                        ));
+                } else {
+                    // Without snapshots, retain only the state needed to continue speculation.
+                    if !self.snapshot_window.is_empty() {
+                        self.snapshot_window.pop_front();
+                    }
+                    self.snapshot_window
+                        .push_back(SpeculativeExecutionSnapshot::new(
+                            new_ordered_leaders.clone(),
+                            current_state.clone(),
+                        ));
                 }
-                self.snapshot_window
-                    .push_back(SpeculativeExecutionSnapshot::new(
-                        new_ordered_leaders.clone(),
-                        new_state.clone(),
-                    ));
-            } else {
-                // If snapshot policy is None, we only keep the last executed state for future speculative execution
-                if self.snapshot_window.len() >= 1 {
-                    self.snapshot_window.pop_front();
-                }
-                self.snapshot_window
-                    .push_back(SpeculativeExecutionSnapshot::new(
-                        new_ordered_leaders.clone(),
-                        new_state.clone(),
-                    ));
             }
+            tokio::task::yield_now().await;
         }
         self.update_snapshot_gauges();
+    }
+
+    fn execution_batch(sub_dag: &CommittedSubDag) -> (Vec<(String, Address)>, usize) {
+        let txs = sub_dag
+            .blocks
+            .iter()
+            .flat_map(|block| block.statements())
+            .filter_map(|statement| match statement {
+                BaseStatement::Share(share) => Some(decode_share_base_statement(share.data())),
+                _ => None,
+            })
+            .collect();
+        (txs, sub_dag.blocks.len())
     }
 
     /// perform consensus execution on the committed ordered blocks
@@ -585,12 +633,18 @@ impl SpeculativeExecutor {
         let window_size = self.snapshot_window.len() as i64;
         let store_size = self.snapshots.len() as i64;
 
-        self.metrics
-            .speculative_snapshot_window_size
-            .set(self.metrics.speculative_snapshot_window_size.get().max(window_size));
-        self.metrics
-            .speculative_snapshot_store_size
-            .set(self.metrics.speculative_snapshot_store_size.get().max(store_size));
+        self.metrics.speculative_snapshot_window_size.set(
+            self.metrics
+                .speculative_snapshot_window_size
+                .get()
+                .max(window_size),
+        );
+        self.metrics.speculative_snapshot_store_size.set(
+            self.metrics
+                .speculative_snapshot_store_size
+                .get()
+                .max(store_size),
+        );
     }
 }
 

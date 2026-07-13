@@ -384,8 +384,8 @@ impl<H: ProcessedTransactionHandler<TransactionLocator>> TestCommitHandler<H> {
     fn update_metrics(
         &self,
         block_creation: Option<&TimeInstant>,
-        current_timestamp: Duration,
-        transaction: &Transaction,
+        _current_timestamp: Duration,
+        _transaction: &Transaction,
     ) {
         // Record inter-block latency.
         if let Some(instant) = block_creation {
@@ -407,19 +407,8 @@ impl<H: ProcessedTransactionHandler<TransactionLocator>> TestCommitHandler<H> {
             self.metrics.benchmark_duration.inc_by(delta);
         }
 
-        // Record end-to-end latency. The first 8 bytes of the transaction are the timestamp of the
-        // transaction submission.
-        let tx_submission_timestamp = TransactionGenerator::extract_timestamp(transaction);
-        let latency = current_timestamp.saturating_sub(tx_submission_timestamp);
-        let square_latency = latency.as_secs_f64().powf(2.0);
-        self.metrics
-            .latency_s
-            .with_label_values(&["shared"])
-            .observe(latency.as_secs_f64());
-        self.metrics
-            .latency_squared_s
-            .with_label_values(&["shared"])
-            .inc_by(square_latency);
+        // End-to-end latency is recorded by the speculative executor only after
+        // the corresponding EVM state has been committed.
     }
 }
 
