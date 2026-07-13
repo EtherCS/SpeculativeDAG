@@ -4408,6 +4408,7 @@ dependencies = [
  "futures",
  "glob",
  "mysticeti-core",
+ "pevm",
  "plotters",
  "prettytable-rs",
  "prometheus-parse",

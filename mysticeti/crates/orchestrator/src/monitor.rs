@@ -39,6 +39,7 @@ impl Monitor {
         let mut commands: Vec<String> = Vec::new();
         commands.extend(Prometheus::install_commands().into_iter().map(String::from));
         commands.extend(Grafana::install_commands().into_iter().map(String::from));
+        commands.extend(ResourceExporter::install_commands());
         commands.extend(NodeExporter::install_commands());
         commands
     }
@@ -313,29 +314,28 @@ impl LocalGrafana {
 struct NodeExporter;
 
 impl NodeExporter {
-    const RELEASE: &'static str = "0.18.1";
+    const RELEASE: &'static str = "1.8.2";
     const DEFAULT_PORT: u16 = 9200;
     const SERVICE_PATH: &'static str = "/etc/systemd/system/node_exporter.service";
+    const TEXTFILE_DIR: &'static str = "/var/lib/node_exporter/textfile_collector";
 
     pub fn install_commands() -> Vec<String> {
-        let build = format!("node_exporter-{}.linux-amd64", Self::RELEASE);
-        let source = format!(
-            "https://github.com/prometheus/node_exporter/releases/download/v{}/{build}.tar.gz",
-            Self::RELEASE
+        let install = format!(
+            "if ! command -v node_exporter >/dev/null; then \
+             case $(uname -m) in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo unsupported architecture >&2; exit 1 ;; esac; \
+             build=node_exporter-{release}.linux-$arch; \
+             curl -fLO https://github.com/prometheus/node_exporter/releases/download/v{release}/$build.tar.gz; \
+             tar -xzf $build.tar.gz; \
+             sudo mv $build/node_exporter /usr/local/bin/; \
+             fi",
+            release = Self::RELEASE,
         );
 
         [
-            "(sudo systemctl status node_exporter && exit 0)",
-            &format!("curl -LO {source}"),
-            &format!(
-                "tar -xvf node_exporter-{}.linux-amd64.tar.gz",
-                Self::RELEASE
-            ),
-            &format!(
-                "sudo mv node_exporter-{}.linux-amd64/node_exporter /usr/local/bin/",
-                Self::RELEASE
-            ),
+            &install,
             "sudo useradd -rs /bin/false node_exporter || true",
+            &format!("sudo mkdir -p {}", Self::TEXTFILE_DIR),
+            &format!("sudo chmod 755 {}", Self::TEXTFILE_DIR),
             "sudo chmod 777 -R /etc/systemd/system/",
             &format!(
                 "sudo echo \"{}\" > {}",
@@ -343,7 +343,7 @@ impl NodeExporter {
                 Self::SERVICE_PATH
             ),
             "sudo systemctl daemon-reload",
-            "sudo systemctl start node_exporter",
+            "sudo systemctl restart node_exporter",
             "sudo systemctl enable node_exporter",
         ]
         .map(|x| x.to_string())
@@ -360,12 +360,114 @@ impl NodeExporter {
             "Group=node_exporter",
             "Type=simple",
             &format!(
-                "ExecStart=/usr/local/bin/node_exporter --web.listen-address=:{}",
-                Self::DEFAULT_PORT
+                "ExecStart=/usr/local/bin/node_exporter --web.listen-address=:{} --collector.textfile.directory={}",
+                Self::DEFAULT_PORT,
+                Self::TEXTFILE_DIR,
             ),
             "[Install]",
             "WantedBy=multi-user.target",
         ]
         .join("\n")
+    }
+}
+
+/// Export resource usage of the validator process through node-exporter's textfile collector.
+struct ResourceExporter;
+
+impl ResourceExporter {
+    const SCRIPT_PATH: &'static str = "/usr/local/bin/mysticeti_resource_exporter";
+    const SERVICE_PATH: &'static str = "/etc/systemd/system/mysticeti_resource_exporter.service";
+
+    pub fn install_commands() -> Vec<String> {
+        vec![
+            format!(
+                "printf %s {} | sudo tee {} >/dev/null",
+                Self::shell_quote(&Self::script()),
+                Self::SCRIPT_PATH,
+            ),
+            format!("sudo chmod 755 {}", Self::SCRIPT_PATH),
+            format!(
+                "printf %s {} | sudo tee {} >/dev/null",
+                Self::shell_quote(&Self::service_config()),
+                Self::SERVICE_PATH,
+            ),
+            "sudo systemctl daemon-reload".to_string(),
+            "sudo systemctl restart mysticeti_resource_exporter".to_string(),
+            "sudo systemctl enable mysticeti_resource_exporter".to_string(),
+        ]
+    }
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+
+    fn script() -> String {
+        format!(
+            r##"#!/usr/bin/env bash
+set -u
+
+output_dir="{}"
+output_file="${{output_dir}}/mysticeti_process.prom"
+sudo mkdir -p "${{output_dir}}"
+
+while true; do
+    pid=$(pgrep -n -f "[m]ysticeti run" || true)
+    cpu_percent=0
+    rss_kb=0
+    if [[ -n "${{pid}}" ]]; then
+        read -r cpu_percent rss_kb < <(ps -p "${{pid}}" -o %cpu= -o rss= 2>/dev/null || echo "0 0")
+    fi
+    rss_bytes=$(( ${{rss_kb:-0}} * 1024 ))
+    temporary_file="${{output_file}}.$$"
+    {{
+        echo "# HELP mysticeti_process_cpu_percent CPU utilization of the Mysticeti validator process"
+        echo "# TYPE mysticeti_process_cpu_percent gauge"
+        echo "mysticeti_process_cpu_percent ${{cpu_percent:-0}}"
+        echo "# HELP mysticeti_process_resident_memory_bytes Resident set size of the Mysticeti validator process"
+        echo "# TYPE mysticeti_process_resident_memory_bytes gauge"
+        echo "mysticeti_process_resident_memory_bytes ${{rss_bytes}}"
+    }} > "${{temporary_file}}"
+    mv "${{temporary_file}}" "${{output_file}}"
+    sleep 1
+done
+"##,
+            NodeExporter::TEXTFILE_DIR
+        )
+    }
+
+    fn service_config() -> String {
+        [
+            "[Unit]",
+            "Description=Mysticeti process resource exporter",
+            "After=network.target",
+            "[Service]",
+            "Type=simple",
+            &format!("ExecStart={}", Self::SCRIPT_PATH),
+            "Restart=always",
+            "RestartSec=1",
+            "[Install]",
+            "WantedBy=multi-user.target",
+        ]
+        .join("\n")
+    }
+}
+
+#[cfg(test)]
+mod resource_exporter_tests {
+    use super::*;
+
+    #[test]
+    fn exports_validator_cpu_and_rss_metrics() {
+        let script = ResourceExporter::script();
+        assert!(script.contains("pgrep -n -f \"[m]ysticeti run\""));
+        assert!(script.contains("mysticeti_process_cpu_percent"));
+        assert!(script.contains("mysticeti_process_resident_memory_bytes"));
+    }
+
+    #[test]
+    fn node_exporter_reads_textfile_metrics() {
+        let service = NodeExporter::service_config();
+        assert!(service.contains("--collector.textfile.directory="));
+        assert!(service.contains(NodeExporter::TEXTFILE_DIR));
     }
 }

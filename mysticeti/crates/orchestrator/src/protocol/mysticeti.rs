@@ -6,10 +6,15 @@ use std::{
     net::IpAddr,
     ops::Deref,
     path::PathBuf,
+    time::Duration,
 };
 
+use clap::ValueEnum;
 use mysticeti_core::{
-    config::{self, ClientParameters, NodeParameters},
+    config::{
+        self, ClientParameters, DirectCommitStallSimulation, NodeParameters,
+        SpeculationPredictionPolicy, SpeculationSnapshotPolicy,
+    },
     types::AuthorityIndex,
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +26,21 @@ use crate::{benchmark::BenchmarkParameters, client::Instance, settings::Settings
 #[serde(transparent)]
 pub struct MysticetiNodeParameters(NodeParameters);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum MysticetiMode {
+    Full,
+    Eac,
+    NoSnapshots,
+    EagerSnapshots,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum MysticetiWorkload {
+    Erc20,
+    Weth,
+    Uniswap,
+}
+
 impl Deref for MysticetiNodeParameters {
     type Target = NodeParameters;
 
@@ -31,10 +51,17 @@ impl Deref for MysticetiNodeParameters {
 
 impl Debug for MysticetiNodeParameters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.consensus_only {
-            write!(f, "c")
+        let mode = self.mode_label();
+        let workload = self.workload_label();
+        if let Some(stall) = &self.direct_commit_stall_simulation {
+            write!(
+                f,
+                "{mode}-{workload}-attack-{}-{}",
+                stall.start_time.as_secs(),
+                stall.start_time.saturating_add(stall.duration).as_secs()
+            )
         } else {
-            write!(f, "fpc")
+            write!(f, "{mode}-{workload}")
         }
     }
 }
@@ -50,6 +77,66 @@ impl Display for MysticetiNodeParameters {
 }
 
 impl ProtocolParameters for MysticetiNodeParameters {}
+
+impl MysticetiNodeParameters {
+    pub fn apply_benchmark_profile(&mut self, mode: MysticetiMode, workload: MysticetiWorkload) {
+        self.0.pevm_workload_type = match workload {
+            MysticetiWorkload::Erc20 => pevm::api::WorkloadType::ERC20(5, 5, 8),
+            MysticetiWorkload::Weth => pevm::api::WorkloadType::WETH(5, 5, 8),
+            MysticetiWorkload::Uniswap => pevm::api::WorkloadType::Uniswap(5, 5, 8),
+        };
+
+        match mode {
+            MysticetiMode::Full => {
+                self.0.enable_speculative_execution = true;
+                self.0.speculation_prediction_policy = SpeculationPredictionPolicy::Adaptive;
+                self.0.speculation_snapshot_policy = SpeculationSnapshotPolicy::Adaptive;
+            }
+            MysticetiMode::Eac => {
+                self.0.enable_speculative_execution = false;
+                self.0.speculation_prediction_policy = SpeculationPredictionPolicy::Adaptive;
+                self.0.speculation_snapshot_policy = SpeculationSnapshotPolicy::None;
+            }
+            MysticetiMode::NoSnapshots => {
+                self.0.enable_speculative_execution = true;
+                self.0.speculation_prediction_policy = SpeculationPredictionPolicy::Adaptive;
+                self.0.speculation_snapshot_policy = SpeculationSnapshotPolicy::None;
+            }
+            MysticetiMode::EagerSnapshots => {
+                self.0.enable_speculative_execution = true;
+                self.0.speculation_prediction_policy = SpeculationPredictionPolicy::Adaptive;
+                self.0.speculation_snapshot_policy = SpeculationSnapshotPolicy::Eager;
+            }
+        }
+    }
+
+    pub fn set_direct_commit_stall(&mut self, start: Duration, end: Duration) {
+        self.0.direct_commit_stall_simulation = Some(DirectCommitStallSimulation::new(
+            start,
+            end.saturating_sub(start),
+        ));
+    }
+
+    fn mode_label(&self) -> &'static str {
+        if !self.enable_speculative_execution {
+            "eac"
+        } else {
+            match self.speculation_snapshot_policy {
+                SpeculationSnapshotPolicy::Adaptive => "full",
+                SpeculationSnapshotPolicy::None => "no-snapshots",
+                SpeculationSnapshotPolicy::Eager => "eager-snapshots",
+            }
+        }
+    }
+
+    fn workload_label(&self) -> &'static str {
+        match self.pevm_workload_type {
+            pevm::api::WorkloadType::ERC20(_, _, _) => "erc20",
+            pevm::api::WorkloadType::WETH(_, _, _) => "weth",
+            pevm::api::WorkloadType::Uniswap(_, _, _) => "uniswap",
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(transparent)]
@@ -249,6 +336,50 @@ impl MysticetiProtocol {
                 .account_addresses_path
                 .clone()
                 .unwrap_or_else(|| "account_addresses_5_5_8.bin".to_string()),
+        }
+    }
+
+    pub fn with_workload(mut self, workload: &pevm::api::WorkloadType) -> Self {
+        let (storage, addresses) = workload.artifact_file_names();
+        self.account_storage_path = storage;
+        self.account_addresses_path = addresses;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_commit_stall_is_serialized_and_labeled() {
+        let mut parameters = MysticetiNodeParameters::default();
+        parameters.apply_benchmark_profile(MysticetiMode::Full, MysticetiWorkload::Erc20);
+        parameters.set_direct_commit_stall(Duration::from_secs(10), Duration::from_secs(45));
+
+        let stall = parameters.direct_commit_stall_simulation.as_ref().unwrap();
+        assert_eq!(stall.start_time, Duration::from_secs(10));
+        assert_eq!(stall.duration, Duration::from_secs(35));
+        assert_eq!(format!("{parameters:?}"), "full-erc20-attack-10-45");
+
+        let yaml = serde_yaml::to_string(&parameters).unwrap();
+        assert!(yaml.contains("direct_commit_stall_simulation:"));
+        assert!(yaml.contains("secs: 35"));
+    }
+
+    #[test]
+    fn benchmark_profiles_map_to_node_parameters() {
+        let cases = [
+            (MysticetiMode::Full, "full"),
+            (MysticetiMode::Eac, "eac"),
+            (MysticetiMode::NoSnapshots, "no-snapshots"),
+            (MysticetiMode::EagerSnapshots, "eager-snapshots"),
+        ];
+
+        for (mode, label) in cases {
+            let mut parameters = MysticetiNodeParameters::default();
+            parameters.apply_benchmark_profile(mode, MysticetiWorkload::Uniswap);
+            assert_eq!(format!("{parameters:?}"), format!("{label}-uniswap"));
         }
     }
 }

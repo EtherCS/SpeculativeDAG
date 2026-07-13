@@ -348,6 +348,14 @@ async fn run(
     } else {
         tracing::info!("Starting validator {authority} without network jitter simulation");
     }
+    if let Some(stall) = &public_config.parameters.direct_commit_stall_simulation {
+        tracing::info!(
+            "Starting validator {} with direct-commit stall [{}, {}) seconds after startup",
+            authority,
+            stall.start_time.as_secs(),
+            stall.start_time.saturating_add(stall.duration).as_secs(),
+        );
+    }
 
     let committee = Arc::new(committee);
 

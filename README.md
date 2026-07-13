@@ -99,6 +99,73 @@ the direct commit rule returns `Undecided`; after `stall_end`, normal direct and
 resume over the accumulated DAG. It is a deterministic fault-injection experiment, not a
 packet-level Byzantine network scheduler.
 
+#### AWS Commit-Stall Evaluation
+
+The orchestrator can run the same deterministic attack on AWS. Configure the AWS credentials,
+repository branch, node parameters, workload artifacts, and `benchmark_duration` in
+`mysticeti/crates/orchestrator/assets/settings.yml`. The benchmark duration must exceed the stall
+end so that the run includes a recovery interval.
+
+The attack is disabled by default (`direct_commit_stall_simulation: null`). A normal benchmark
+therefore requires no attack-related arguments:
+
+```bash
+cargo run --release --bin orchestrator -- benchmark --committee 10 --loads 400
+```
+
+From the `mysticeti` directory, run:
+
+```bash
+cargo run --release --bin orchestrator -- \
+  --settings-path crates/orchestrator/assets/settings.yml \
+  benchmark --committee 10 --loads 400 \
+  --mode full --workload erc20 \
+  --stall-start 10 --stall-end 45
+```
+
+Both stall arguments are measured in seconds from each validator's startup and must be specified
+together. The orchestrator injects the interval into the public node configuration generated on
+AWS. Result and log names include `attack-<start>-<end>` to distinguish attack runs from normal
+benchmarks.
+
+AWS benchmarks accept the same execution modes and workloads used by local evaluations:
+
+- `--mode full` (default): adaptive prediction and adaptive snapshots.
+- `--mode eac`: execute only after consensus ordering.
+- `--mode no-snapshots`: speculate without snapshots.
+- `--mode eager-snapshots`: speculate with eager snapshots.
+- `--workload erc20` (default), `weth`, or `uniswap`.
+
+The orchestrator selects the matching `5_5_8` storage and account-address artifacts and includes
+both mode and workload in result and log names. For example:
+
+```bash
+cargo run --release --bin orchestrator -- \
+  benchmark --committee 10 --loads 400 \
+  --mode eager-snapshots --workload uniswap
+```
+
+When monitoring is enabled, each AWS node also samples the validator process once per second and
+exports `mysticeti_process_cpu_percent` and `mysticeti_process_resident_memory_bytes` through
+node-exporter. The default Grafana dashboard shows **Validator CPU (%)** and **Validator RSS (MB)**
+immediately below the latency panel. CPU follows `ps` semantics and can exceed 100% when the
+validator uses more than one CPU core; RSS is the validator process's resident memory, not total
+host memory.
+
+For a fixed interval, the same configuration can be placed in `node-parameters.yml` instead:
+
+```yaml
+direct_commit_stall_simulation:
+  start_time:
+    secs: 10
+    nanos: 0
+  duration:
+    secs: 35
+    nanos: 0
+```
+
+Command-line stall arguments override the interval loaded from the node-parameters file.
+
 ## Experiment Modes
 
 Both `speculative.sh` and `jitterrun.sh` accept an optional experiment mode, workload, and output directory:

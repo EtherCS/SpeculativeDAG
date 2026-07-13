@@ -3,7 +3,7 @@
 
 //! Orchestrator entry point.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use benchmark::BenchmarkParameters;
 use clap::Parser;
@@ -11,6 +11,7 @@ use client::{aws::AwsClient, vultr::VultrClient, ServerProviderClient};
 use eyre::Context;
 use measurements::MeasurementsCollection;
 use orchestrator::Orchestrator;
+use protocol::mysticeti::{MysticetiMode, MysticetiWorkload};
 use protocol::ProtocolParameters;
 use settings::{CloudProvider, Settings};
 use ssh::SshConnectionManager;
@@ -88,6 +89,24 @@ pub enum Operation {
         /// useful when debugging in some specific scenarios.
         #[clap(long, action, default_value_t = false, global = true)]
         skip_testbed_configuration: bool,
+
+        /// Seconds after validator startup at which direct decisions begin to stall.
+        /// Must be specified together with --stall-end.
+        #[clap(long, value_name = "SECONDS", global = true)]
+        stall_start: Option<u64>,
+
+        /// Seconds after validator startup at which normal direct decisions resume.
+        /// Must be specified together with --stall-start.
+        #[clap(long, value_name = "SECONDS", global = true)]
+        stall_end: Option<u64>,
+
+        /// Speculative execution mode to evaluate.
+        #[clap(long, value_enum, default_value_t = MysticetiMode::Full, global = true)]
+        mode: MysticetiMode,
+
+        /// EVM workload to execute.
+        #[clap(long, value_enum, default_value_t = MysticetiWorkload::Erc20, global = true)]
+        workload: MysticetiWorkload,
     },
     /// Print a summary of the specified measurements collection.
     Summarize {
@@ -203,6 +222,10 @@ async fn run<C: ServerProviderClient>(
             loads,
             skip_testbed_update,
             skip_testbed_configuration,
+            stall_start,
+            stall_end,
+            mode,
+            workload,
         } => {
             // Create a new orchestrator to instruct the testbed.
             let username = testbed.username();
@@ -218,13 +241,36 @@ async fn run<C: ServerProviderClient>(
                 .await
                 .wrap_err("Failed to load testbed setup commands")?;
 
-            let protocol_commands = Protocol::new(&settings);
-            let node_parameters = match &settings.node_parameters_path {
+            let mut node_parameters = match &settings.node_parameters_path {
                 Some(path) => {
                     NodeParameters::load(path).wrap_err("Failed to load node's parameters")?
                 }
                 None => NodeParameters::default(),
             };
+            node_parameters.apply_benchmark_profile(mode, workload);
+            match (stall_start, stall_end) {
+                (Some(start), Some(end)) => {
+                    if end <= start {
+                        eyre::bail!("stall-end ({end}) must be greater than stall-start ({start})");
+                    }
+                    if !settings.benchmark_duration.is_zero()
+                        && settings.benchmark_duration <= Duration::from_secs(end)
+                    {
+                        eyre::bail!(
+                            "benchmark-duration ({}) must be greater than stall-end ({end}) so recovery can be measured",
+                            settings.benchmark_duration.as_secs()
+                        );
+                    }
+                    node_parameters.set_direct_commit_stall(
+                        Duration::from_secs(start),
+                        Duration::from_secs(end),
+                    );
+                }
+                (None, None) => {}
+                _ => eyre::bail!("stall-start and stall-end must be specified together"),
+            }
+            let protocol_commands =
+                Protocol::new(&settings).with_workload(&node_parameters.pevm_workload_type);
             let client_parameters = match &settings.client_parameters_path {
                 Some(path) => {
                     ClientParameters::load(path).wrap_err("Failed to load client's parameters")?
