@@ -80,58 +80,21 @@ impl SpeculativeExecutor {
     }
 
     pub async fn run(&mut self) {
-        let mut pending_consensus: VecDeque<(APSTree, Vec<CommittedSubDag>)> = VecDeque::new();
-        let mut pending_speculative: VecDeque<Vec<CommittedSubDag>> = VecDeque::new();
-
-        loop {
-            tokio::select! {
-                Some(speculative_message) = self.speculative_message_receiver.recv() => {
-                    match speculative_message {
-                        SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => {
-                            match flag {
-                                SpeculativeMessageStatus::Consensus => {
-                                    pending_consensus.push_back((aps_tree, sub_dags));
-                                }
-                                SpeculativeMessageStatus::Speculative => {
-                                    pending_speculative.clear();
-                                    pending_speculative.push_back(sub_dags);
-                                }
-                            }
-                        }
-                        SpeculativeMessage::OtherMessage => {
-                            // Handle other types of messages here
-                        }
+        // Core sends only newly predicted sub-DAGs, so every speculative message is
+        // an incremental state transition. Process the channel in FIFO order: replacing
+        // queued speculative messages would create gaps in the executed prefix.
+        while let Some(speculative_message) = self.speculative_message_receiver.recv().await {
+            match speculative_message {
+                SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => match flag {
+                    SpeculativeMessageStatus::Consensus => {
+                        self.handle_consensus_message(aps_tree, sub_dags).await;
                     }
-
-                    while let Ok(next_message) = self.speculative_message_receiver.try_recv() {
-                        match next_message {
-                            SpeculativeMessage::ExecuteTxs(aps_tree, sub_dags, flag) => {
-                                match flag {
-                                    SpeculativeMessageStatus::Consensus => {
-                                        pending_consensus.push_back((aps_tree, sub_dags));
-                                    }
-                                    SpeculativeMessageStatus::Speculative => {
-                                        pending_speculative.clear();
-                                        pending_speculative.push_back(sub_dags);
-                                    }
-                                }
-                            }
-                            SpeculativeMessage::OtherMessage => {
-                                // Handle other types of messages here
-                            }
-                        }
+                    SpeculativeMessageStatus::Speculative => {
+                        self.handle_speculative_message(sub_dags).await;
                     }
-                }
-                else => break,
-            }
-
-            while let Some((aps_tree, sub_dags)) = pending_consensus.pop_front() {
-                self.handle_consensus_message(aps_tree, sub_dags).await;
-            }
-
-            if pending_consensus.is_empty() {
-                if let Some(sub_dags) = pending_speculative.pop_front() {
-                    self.handle_speculative_message(sub_dags).await;
+                },
+                SpeculativeMessage::OtherMessage => {
+                    // Handle other types of messages here.
                 }
             }
         }
@@ -562,8 +525,9 @@ impl SpeculativeExecutor {
             }
         }
 
-        // If no positive prefix match exists, reuse the most recent snapshot (which may have a zero-length prefix)
-        best_match.or_else(|| all_snapshots.last().copied())
+        // A zero-length prefix is not reusable: its state may belong to an unrelated
+        // speculative branch. The caller must execute from the committed base instead.
+        best_match
     }
 
     /// Clean and update snapshots after a set of leaders has been committed
