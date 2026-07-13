@@ -17,3 +17,4 @@ mysticeti/logs/*
 
 mysticeti/crates/orchestrator/assets/settings.yml
 mysticeti/crates/orchestrator/assets/node-parameters.yml
+mysticeti/crates/orchestrator/assets/client-parameters.yml
