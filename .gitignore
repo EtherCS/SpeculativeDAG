@@ -13,5 +13,7 @@ mysticeti/logs/*
 **.ansi
 **-validator*
 
+/autobahn/
+
 mysticeti/crates/orchestrator/assets/settings.yml
 mysticeti/crates/orchestrator/assets/node-parameters.yml
