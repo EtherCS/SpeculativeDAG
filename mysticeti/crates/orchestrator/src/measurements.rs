@@ -37,6 +37,11 @@ pub struct Measurement {
 }
 
 impl Measurement {
+    /// Override the sample timestamp with elapsed benchmark collection time.
+    pub fn set_timestamp(&mut self, timestamp: Duration) {
+        self.timestamp = timestamp;
+    }
+
     /// Make new measurements from the text exposed by prometheus.
     /// Every measurement is identified by a unique label.
     pub fn from_prometheus<M: ProtocolMetrics>(text: &str) -> HashMap<Label, Self> {
@@ -222,6 +227,69 @@ impl MeasurementsCollection {
             .unwrap_or_default() as u64
     }
 
+    fn window_endpoints(&self, label: &Label, window: Duration) -> Vec<(Measurement, Duration)> {
+        self.data
+            .get(label)
+            .into_iter()
+            .flat_map(|data| data.values())
+            .filter_map(|series| {
+                let first_timestamp = series.first()?.timestamp;
+                series
+                    .iter()
+                    .filter_map(|measurement| {
+                        // New result files use collection time directly. For older files,
+                        // subtract validator uptime and place the first scrape at one interval.
+                        let elapsed = measurement
+                            .timestamp
+                            .saturating_sub(first_timestamp)
+                            .saturating_add(self.parameters.settings.scrape_interval);
+                        (elapsed <= window).then_some((measurement, elapsed))
+                    })
+                    .last()
+                    .map(|(measurement, elapsed)| (measurement.clone(), elapsed))
+            })
+            .collect()
+    }
+
+    fn benchmark_duration_in_window(&self, window: Duration) -> Duration {
+        self.labels()
+            .flat_map(|label| self.window_endpoints(label, window))
+            .map(|(_, elapsed)| elapsed)
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn aggregate_tps_in_window(&self, label: &Label, window: Duration) -> u64 {
+        self.window_endpoints(label, window)
+            .into_iter()
+            .map(|(measurement, elapsed)| {
+                measurement
+                    .count
+                    .checked_div(elapsed.as_secs_f64() as usize)
+                    .unwrap_or_default() as u64
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn aggregate_average_latency_in_window(&self, label: &Label, window: Duration) -> Duration {
+        let endpoints = self.window_endpoints(label, window);
+        endpoints
+            .iter()
+            .map(|(measurement, _)| measurement.average_latency())
+            .sum::<Duration>()
+            .checked_div(endpoints.len() as u32)
+            .unwrap_or_default()
+    }
+
+    fn max_stdev_latency_in_window(&self, label: &Label, window: Duration) -> Duration {
+        self.window_endpoints(label, window)
+            .iter()
+            .map(|(measurement, _)| measurement.stdev_latency())
+            .max()
+            .unwrap_or_default()
+    }
+
     /// Aggregate the average latency of multiple data points by taking the average.
     pub fn aggregate_average_latency(&self, label: &Label) -> Duration {
         let all_measurements = self.all_measurements(label);
@@ -247,12 +315,14 @@ impl MeasurementsCollection {
         fs::write(file, json).unwrap();
     }
 
-    /// Display a summary of the measurements.
-    pub fn display_summary(&self) {
+    /// Display a summary, optionally restricted to the first part of metric collection.
+    pub fn display_summary_with_window(&self, window: Option<Duration>) {
         let mut table = Table::new();
         table.set_format(display::default_table_format());
 
-        let duration = self.benchmark_duration();
+        let duration = window
+            .map(|window| self.benchmark_duration_in_window(window))
+            .unwrap_or_else(|| self.benchmark_duration());
 
         table.set_titles(row![bH2->"Benchmark Summary"]);
         table.add_row(row![b->"Benchmark type:", self.parameters.node_parameters]);
@@ -265,9 +335,15 @@ impl MeasurementsCollection {
         let mut labels: Vec<_> = self.labels().collect();
         labels.sort();
         for label in labels {
-            let total_tps = self.aggregate_tps(label);
-            let average_latency = self.aggregate_average_latency(label);
-            let stdev_latency = self.max_stdev_latency(label);
+            let total_tps = window
+                .map(|window| self.aggregate_tps_in_window(label, window))
+                .unwrap_or_else(|| self.aggregate_tps(label));
+            let average_latency = window
+                .map(|window| self.aggregate_average_latency_in_window(label, window))
+                .unwrap_or_else(|| self.aggregate_average_latency(label));
+            let stdev_latency = window
+                .map(|window| self.max_stdev_latency_in_window(label, window))
+                .unwrap_or_else(|| self.max_stdev_latency(label));
 
             table.add_row(row![bH2->""]);
             table.add_row(row![b->"Workload:", label]);
@@ -319,6 +395,39 @@ mod test {
         // sqrt( squared_sum / count - avg^2 )
         let stdev = data.stdev_latency();
         assert_eq!((stdev.as_secs_f64() * 10.0).round(), 7.0);
+    }
+
+    #[test]
+    fn measurement_window_normalizes_validator_uptime() {
+        let mut parameters = BenchmarkParameters::new_for_tests();
+        parameters.settings.scrape_interval = Duration::from_secs(10);
+        let mut collection = MeasurementsCollection::new(parameters);
+
+        for (timestamp, count, sum_ms) in [(200, 100, 1_000), (230, 400, 8_000), (260, 900, 45_000)]
+        {
+            collection.add(
+                0,
+                "shared".to_string(),
+                Measurement {
+                    timestamp: Duration::from_secs(timestamp),
+                    buckets: HashMap::new(),
+                    sum: Duration::from_millis(sum_ms),
+                    count,
+                    squared_sum: 0.0,
+                },
+            );
+        }
+
+        let window = Duration::from_secs(40);
+        assert_eq!(collection.benchmark_duration_in_window(window), window);
+        assert_eq!(
+            collection.aggregate_tps_in_window(&"shared".to_string(), window),
+            10
+        );
+        assert_eq!(
+            collection.aggregate_average_latency_in_window(&"shared".to_string(), window),
+            Duration::from_millis(20)
+        );
     }
 
     #[test]

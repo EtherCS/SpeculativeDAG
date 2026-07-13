@@ -107,12 +107,20 @@ pub enum Operation {
         /// EVM workload to execute.
         #[clap(long, value_enum, default_value_t = MysticetiWorkload::Erc20, global = true)]
         workload: MysticetiWorkload,
+
+        /// Only use the first N seconds of collected metrics in the printed summary.
+        #[clap(long, value_name = "SECONDS", global = true)]
+        measurement_duration: Option<u64>,
     },
     /// Print a summary of the specified measurements collection.
     Summarize {
         /// The path to the settings file.
         #[clap(long, value_name = "FILE")]
         path: PathBuf,
+
+        /// Only use the first N seconds of collected metrics in the summary.
+        #[clap(long, value_name = "SECONDS")]
+        measurement_duration: Option<u64>,
     },
 }
 
@@ -226,6 +234,7 @@ async fn run<C: ServerProviderClient>(
             stall_end,
             mode,
             workload,
+            measurement_duration,
         } => {
             // Create a new orchestrator to instruct the testbed.
             let username = testbed.username();
@@ -293,6 +302,7 @@ async fn run<C: ServerProviderClient>(
                 protocol_commands,
                 ssh_manager,
             )
+            .with_summary_window(measurement_duration.map(Duration::from_secs))
             .skip_testbed_update(skip_testbed_update)
             .skip_testbed_configuration(skip_testbed_configuration)
             .run_benchmarks(set_of_benchmark_parameters)
@@ -301,7 +311,11 @@ async fn run<C: ServerProviderClient>(
         }
 
         // Print a summary of the specified measurements collection.
-        Operation::Summarize { path } => MeasurementsCollection::load(path)?.display_summary(),
+        Operation::Summarize {
+            path,
+            measurement_duration,
+        } => MeasurementsCollection::load(path)?
+            .display_summary_with_window(measurement_duration.map(Duration::from_secs)),
     }
     Ok(())
 }

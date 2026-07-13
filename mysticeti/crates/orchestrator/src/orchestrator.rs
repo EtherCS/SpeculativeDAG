@@ -5,6 +5,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     path::PathBuf,
+    time::Duration,
 };
 
 use tokio::time::{self, Instant};
@@ -42,6 +43,8 @@ pub struct Orchestrator<P> {
     /// Skip the testbed configuration. Setting this value to true is dangerous and may
     /// lead to unexpected behavior.
     skip_testbed_configuration: bool,
+    /// Optional prefix of collected metrics used by the printed summary.
+    summary_window: Option<Duration>,
 }
 
 impl<P> Orchestrator<P> {
@@ -61,7 +64,14 @@ impl<P> Orchestrator<P> {
             ssh_manager,
             skip_testbed_update: false,
             skip_testbed_configuration: false,
+            summary_window: None,
         }
+    }
+
+    /// Restrict the printed benchmark summary to the beginning of metric collection.
+    pub fn with_summary_window(mut self, summary_window: Option<Duration>) -> Self {
+        self.summary_window = summary_window;
+        self
     }
 
     /// Skip the testbed update.
@@ -461,7 +471,10 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
                         .await?;
 
                     for (i, (stdout, _stderr)) in stdio.iter().enumerate() {
-                        for (label, measurement) in Measurement::from_prometheus::<P>(stdout) {
+                        for (label, mut measurement) in Measurement::from_prometheus::<P>(stdout) {
+                            // Validator uptime includes deployment and bootstrap. Use the
+                            // orchestrator's collection clock for benchmark-window analysis.
+                            measurement.set_timestamp(Duration::from_secs(elapsed));
                             aggregator.add(i, label, measurement);
                         }
                     }
@@ -657,7 +670,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
 
             // Wait for the benchmark to terminate. Then save the results and print a summary.
             let aggregator = self.run(&parameters).await?;
-            aggregator.display_summary();
+            aggregator.display_summary_with_window(self.summary_window);
 
             // Kill the nodes and clients (without deleting the log files).
             self.cleanup(false, false).await?;
