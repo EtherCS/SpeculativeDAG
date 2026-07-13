@@ -53,8 +53,6 @@ impl Display for AwsClient {
 }
 
 impl AwsClient {
-    const OS_IMAGE: &'static str =
-        "Canonical, Ubuntu, 24.04 LTS, amd64 noble image build on 2024-04-23";
     const DEFAULT_EBS_SIZE_GB: i32 = 500; // Default size of the EBS volume in GB.
 
     /// Make a new AWS client.
@@ -127,13 +125,46 @@ impl AwsClient {
         }
     }
 
-    /// Query the image id determining the os of the instances.
+    /// Return the EC2 architecture and Canonical image architecture for the configured type.
+    async fn instance_architecture(
+        &self,
+        client: &aws_sdk_ec2::Client,
+    ) -> CloudProviderResult<(&'static str, &'static str)> {
+        let response = client
+            .describe_instance_types()
+            .instance_types(self.settings.specs.as_str().into())
+            .send()
+            .await?;
+        let architecture = response
+            .instance_types()
+            .first()
+            .and_then(|info| info.processor_info())
+            .and_then(|info| info.supported_architectures().first())
+            .map(|architecture| architecture.as_str())
+            .ok_or_else(|| {
+                CloudProviderError::UnexpectedResponse(format!(
+                    "AWS returned no architecture for instance type '{}'",
+                    self.settings.specs
+                ))
+            })?;
+
+        match architecture {
+            "arm64" => Ok(("arm64", "arm64")),
+            "x86_64" => Ok(("x86_64", "amd64")),
+            architecture => Err(CloudProviderError::RequestError(format!(
+                "Unsupported architecture '{architecture}' for instance type '{}'",
+                self.settings.specs
+            ))),
+        }
+    }
+
+    /// Query an Ubuntu image matching the configured instance architecture.
     /// NOTE: The image id changes depending on the region.
     async fn find_image_id(&self, client: &aws_sdk_ec2::Client) -> CloudProviderResult<String> {
-        // Try multiple Ubuntu versions in order of preference
-        let search_patterns = vec![
-            "ubuntu/images/hvm-ssd/ubuntu-noble-24.04-amd64-server-*",
-            "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*",
+        let (ec2_architecture, image_architecture) = self.instance_architecture(client).await?;
+        let search_patterns = [
+            format!("ubuntu/images/hvm-ssd/ubuntu-noble-24.04-{image_architecture}-server-*"),
+            format!("ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-{image_architecture}-server-*"),
         ];
 
         for pattern in search_patterns {
@@ -150,6 +181,12 @@ impl AwsClient {
                     FilterBuilder::default()
                         .name("state")
                         .values("available")
+                        .build(),
+                )
+                .filters(
+                    FilterBuilder::default()
+                        .name("architecture")
+                        .values(ec2_architecture)
                         .build(),
                 );
 
@@ -172,27 +209,9 @@ impl AwsClient {
             }
         }
 
-        // Final fallback: try the original description-based search
-        let fallback_request = client.describe_images().filters(
-            FilterBuilder::default()
-                .name("description")
-                .values(Self::OS_IMAGE)
-                .build(),
-        );
-        let fallback_response = fallback_request.send().await?;
-
-        // Parse the response to select the first returned image id.
-        fallback_response
-            .images()
-            .first()
-            .ok_or_else(|| CloudProviderError::RequestError("Cannot find image id".into()))?
-            .image_id
-            .clone()
-            .ok_or_else(|| {
-                CloudProviderError::UnexpectedResponse(
-                    "Received image description without id".into(),
-                )
-            })
+        Err(CloudProviderError::RequestError(format!(
+            "Cannot find an available Ubuntu AMI for architecture '{ec2_architecture}'"
+        )))
     }
 
     /// Create a new security group for the instance (if it doesn't already exist).
