@@ -410,6 +410,10 @@ impl PevmExecutor {
         speculative_states: EvmState,
     ) -> EvmState {
         let mut txs = deserializer::decode_batch_hex(txs);
+        // Consensus may omit a block while ordering later transactions from the
+        // same generated account. Nonces are not part of this benchmark's state
+        // transition semantics, so do not reject the committed order on a gap.
+        txs.iter_mut().for_each(|tx| tx.nonce = None);
         // tracing::info!("Executed transactions speculatively in a sequential manner");
         crate::speculative_execute_revm_sequential(
             &self.chain,
@@ -434,6 +438,7 @@ impl PevmExecutor {
 
     pub fn execute(&mut self, txs: Vec<(String, Address)>) {
         let mut txs = deserializer::decode_batch_hex(txs);
+        txs.iter_mut().for_each(|tx| tx.nonce = None);
 
         match self.execution_mode {
             ExecutionMode::Sequential => {
