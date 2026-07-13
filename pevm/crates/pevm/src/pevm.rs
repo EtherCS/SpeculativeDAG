@@ -489,12 +489,22 @@ pub fn speculative_execute_revm_sequential<S: Storage, C: PevmChain>(
     db.commit(speculative_states.clone());
     let mut evm = build_evm(&mut db, chain, spec_id, block_env, None, true);
     let mut results: EvmState = speculative_states;
-    for tx in txs {
+    for (tx_index, tx) in txs.into_iter().enumerate() {
+        let caller = tx.caller;
+        let nonce = tx.nonce;
         *evm.tx_mut() = tx;
 
         let result_and_state = match evm.transact() {
             Ok(result) => result,
-            Err(_) => break, // todo: return error signal
+            Err(_) => {
+                tracing::error!(
+                    tx_index,
+                    ?caller,
+                    ?nonce,
+                    "Speculative EVM execution stopped at an invalid transaction"
+                );
+                break;
+            }
         };
 
         let write_set = result_and_state.state.clone();
