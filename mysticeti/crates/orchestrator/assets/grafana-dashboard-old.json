@@ -223,7 +223,7 @@
             "uid": "Fixed-UID-testbed"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(latency_s_bucket{workload=\"shared\"}[$__rate_interval]))) * 1000",
+          "expr": "avg(transaction_committed_latency{v=\"p50\"}) / 1000",
           "hide": false,
           "legendFormat": "Tx Commit p50",
           "range": true,
@@ -235,7 +235,7 @@
             "uid": "Fixed-UID-testbed"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(latency_s_bucket{workload=\"shared\"}[$__rate_interval]))) * 1000",
+          "expr": "avg(transaction_committed_latency{v=\"p99\"}) / 1000",
           "hide": false,
           "legendFormat": "Tx Commit p99",
           "range": true,
