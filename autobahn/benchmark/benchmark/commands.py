@@ -26,14 +26,23 @@ class CommandMaker:
         return f'./node generate_keys --filename {filename}'
 
     @staticmethod
-    def run_primary(keys, committee, store, parameters, debug=False):
+    def run_primary(keys, committee, store, parameters, debug=False,
+                    benchmark_start_unix_ms=None):
         assert isinstance(keys, str)
         assert isinstance(committee, str)
         assert isinstance(parameters, str)
         assert isinstance(debug, bool)
+        assert benchmark_start_unix_ms is None or isinstance(
+            benchmark_start_unix_ms, int
+        )
         v = '-vvv' if debug else '-vv'
+        benchmark_start = (
+            f' --benchmark-start-unix-ms {benchmark_start_unix_ms}'
+            if benchmark_start_unix_ms is not None else ''
+        )
         return (f'./node {v} run --keys {keys} --committee {committee} '
-                f'--store {store} --parameters {parameters} primary')
+                f'--store {store} --parameters {parameters}'
+                f'{benchmark_start} primary')
 
     @staticmethod
     def run_worker(keys, committee, store, parameters, id, debug=False):

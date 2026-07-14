@@ -19,7 +19,7 @@ use crypto::{Digest, PublicKey, SignatureService};
 use crypto::{Hash as _, Signature};
 use futures::stream::FuturesUnordered;
 use futures::{Future, StreamExt};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use network::{CancelHandler, ReliableSender};
 use core::panic;
 use std::borrow::BorrowMut;
@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 //use std::task::Poll;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -151,6 +151,7 @@ pub struct Core {
     order_stall_start: u64,
     order_stall_duration: u64,
     order_stall_start_time: Instant,
+    benchmark_start_unix_ms: u64,
     order_stall_delayed_prepares: HashMap<Slot, ConsensusMessage>,
     order_stall_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
@@ -190,6 +191,7 @@ impl Core {
         simulate_order_stall: bool,
         order_stall_start: u64,
         order_stall_duration: u64,
+        benchmark_start_unix_ms: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -264,6 +266,7 @@ impl Core {
                 order_stall_start,
                 order_stall_duration,
                 order_stall_start_time: Instant::now(),
+                benchmark_start_unix_ms,
                 order_stall_delayed_prepares: HashMap::new(),
                 order_stall_timer_futures: FuturesUnordered::new(),
             }
@@ -924,16 +927,24 @@ impl Core {
         if !self.simulate_order_stall {
             return false;
         }
-        let elapsed = self.order_stall_start_time.elapsed().as_millis() as u64;
+        let elapsed = self.order_stall_elapsed_ms();
         elapsed >= self.order_stall_start
             && elapsed < self.order_stall_start.saturating_add(self.order_stall_duration)
+    }
+
+    fn order_stall_elapsed_ms(&self) -> u64 {
+        if self.benchmark_start_unix_ms == 0 {
+            self.order_stall_start_time.elapsed().as_millis() as u64
+        } else {
+            unix_time_ms().saturating_sub(self.benchmark_start_unix_ms)
+        }
     }
 
     #[async_recursion]
     async fn send_consensus_req(&mut self, mut consensus_message: ConsensusMessage) -> DagResult<()> {
         if self.order_stall_active() {
             if let ConsensusMessage::Prepare { slot, view, .. } = &consensus_message {
-                debug!(
+                info!(
                     "Order-stall attack: withholding Prepare for slot {} view {}",
                     slot, view
                 );
@@ -2119,12 +2130,19 @@ impl Core {
             let stall_end = self
                 .order_stall_start
                 .saturating_add(self.order_stall_duration);
-            debug!(
+            info!(
                 "Order-stall attack enabled: withholding Prepare messages during [{} ms, {} ms)",
                 self.order_stall_start, stall_end
             );
+            let timer_delay = if self.benchmark_start_unix_ms == 0 {
+                stall_end
+            } else {
+                self.benchmark_start_unix_ms
+                    .saturating_add(stall_end)
+                    .saturating_sub(unix_time_ms())
+            };
             self.order_stall_timer_futures
-                .push(Box::pin(sleep(Duration::from_millis(stall_end))));
+                .push(Box::pin(sleep(Duration::from_millis(timer_delay))));
         }
 
         //Simulate asynchrony duration:
@@ -2251,7 +2269,7 @@ impl Core {
                         // local timeout raced with stall expiry. Receivers still verify
                         // the TC and view, so stale prepares are safely ignored while a
                         // higher valid prepare can synchronize lagging replicas.
-                        debug!("Order-stall attack ended: releasing Prepare for slot {}", slot);
+                        info!("Order-stall attack ended: releasing Prepare for slot {}", slot);
                         let _ = self.send_consensus_req(delayed_prepare).await;
                     }
                     Ok(())
@@ -2317,4 +2335,11 @@ impl Core {
             }
         }
     }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }

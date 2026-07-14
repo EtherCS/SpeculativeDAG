@@ -219,7 +219,7 @@ def remote(ctx, debug=True, execution='ordered', workload='erc20',
 def remote_attack(ctx, debug=True, execution='ordered', workload='erc20',
                   executor='sequential', artifacts='.', num_clusters=5,
                   families_per_cluster=5, people_per_family=8,
-                  order_stall_start=10_000, order_stall_duration=15_000,
+                  order_stall_start=10_000, order_stall_duration=10_000,
                   faults=0, nodes=4, workers=1, rate=400, tx_size=512,
                   duration=60, runs=1):
     ''' Run a deterministic consecutive order-stall benchmark on AWS '''

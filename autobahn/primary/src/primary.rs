@@ -227,6 +227,7 @@ impl Primary {
             parameters.simulate_order_stall,
             parameters.order_stall_start,
             parameters.order_stall_duration,
+            parameters.benchmark_start_unix_ms,
         );
 
         Committer::spawn(

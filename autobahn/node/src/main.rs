@@ -58,6 +58,9 @@ async fn main() -> Result<()> {
                 .args_from_usage("--num-clusters=[INT] 'Number of workload clusters'")
                 .args_from_usage("--families-per-cluster=[INT] 'Number of families per cluster'")
                 .args_from_usage("--people-per-family=[INT] 'Number of people per family'")
+                .args_from_usage(
+                    "--benchmark-start-unix-ms=[INT] 'Shared remote benchmark epoch in Unix milliseconds'",
+                )
                 .subcommand(SubCommand::with_name("primary").about("Run a single primary"))
                 .subcommand(
                     SubCommand::with_name("worker")
@@ -178,6 +181,11 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
         parameters.evm_num_people_per_family = value
             .parse()
             .context("The number of people per family must be a positive integer")?;
+    }
+    if let Some(value) = matches.value_of("benchmark-start-unix-ms") {
+        parameters.benchmark_start_unix_ms = value
+            .parse()
+            .context("The benchmark start timestamp must be a non-negative integer")?;
     }
 
     // The `SignatureService` provides signatures on input digests.

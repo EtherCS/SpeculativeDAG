@@ -6,7 +6,7 @@ from paramiko import RSAKey
 from paramiko.ssh_exception import PasswordRequiredException, SSHException
 from os.path import basename, splitext
 from datetime import datetime
-from time import sleep
+from time import sleep, time
 from math import ceil
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
@@ -37,12 +37,15 @@ class Bench:
         self.manager = InstanceManager.make()
         self.settings = self.manager.settings
         try:
-            # Validate the configured key eagerly. Paramiko will load it by path
-            # for each connection, avoiding a shared key object across threads.
-            RSAKey.from_private_key_file(self.manager.settings.key_path)
+            # Load the configured AWS key as RSA explicitly. Passing only its
+            # filename makes some Paramiko versions mis-detect OpenSSH RSA keys
+            # as DSA keys, which later fails while constructing the signature.
+            private_key = RSAKey.from_private_key_file(
+                self.manager.settings.key_path
+            )
             self.connect = dict(ctx.connect_kwargs)
             self.connect.update({
-                'key_filename': self.manager.settings.key_path,
+                'pkey': private_key,
                 # Do not try unrelated agent/default keys before the AWS key.
                 'allow_agent': False,
                 'look_for_keys': False,
@@ -424,6 +427,9 @@ class Bench:
 
         # Run the primaries (except the faulty ones).
         Print.info('Booting primaries...')
+        # Give every primary the same time origin. The grace period absorbs
+        # concurrent SSH launch skew without delaying consensus startup.
+        benchmark_start_unix_ms = int(time() * 1_000) + 10_000
         launches = []
         for i, address in enumerate(committee.primary_addresses(faults)):
             host = Committee.ip(address)
@@ -432,7 +438,8 @@ class Bench:
                 PathMaker.committee_file(),
                 PathMaker.db_path(i),
                 PathMaker.parameters_file(),
-                debug=debug
+                debug=debug,
+                benchmark_start_unix_ms=benchmark_start_unix_ms,
             )
             log_file = PathMaker.primary_log_file(i)
             launches.append((host, cmd, log_file))

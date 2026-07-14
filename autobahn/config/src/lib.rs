@@ -104,6 +104,8 @@ pub struct Parameters {
     pub simulate_order_stall: bool,
     pub order_stall_start: u64,
     pub order_stall_duration: u64,
+    /// Shared remote benchmark epoch. Zero keeps process-relative timing.
+    pub benchmark_start_unix_ms: u64,
 
     // EVM execution config
     pub evm_execution_mode: String,
@@ -143,6 +145,7 @@ impl Default for Parameters {
             simulate_order_stall: false,
             order_stall_start: 10_000,
             order_stall_duration: 50_000,
+            benchmark_start_unix_ms: 0,
 
             evm_execution_mode: "none".to_string(),
             evm_workload: "erc20".to_string(),
