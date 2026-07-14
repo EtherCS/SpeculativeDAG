@@ -6,7 +6,7 @@ use std::{
     net::IpAddr,
     ops::Deref,
     path::PathBuf,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use clap::ValueEnum;
@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{ProtocolCommands, ProtocolMetrics, ProtocolParameters, BINARY_PATH};
 use crate::{benchmark::BenchmarkParameters, client::Instance, settings::Settings};
+
+const COORDINATED_START_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(transparent)]
@@ -235,6 +237,14 @@ impl ProtocolCommands for MysticetiProtocol {
     where
         I: IntoIterator<Item = Instance>,
     {
+        // SSH process launches can differ by tens of seconds on a large testbed.
+        // A shared future start keeps consensus, workload, and attack timers aligned.
+        let benchmark_start_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("System clock is before the Unix epoch")
+            .saturating_add(COORDINATED_START_GRACE_PERIOD)
+            .as_millis();
+
         instances
             .into_iter()
             .enumerate()
@@ -259,6 +269,7 @@ impl ProtocolCommands for MysticetiProtocol {
                         "--client-parameters-path {}",
                         client_parameters_path.display()
                     ),
+                    &format!("--benchmark-start-unix-ms {benchmark_start_unix_ms}"),
                 ]
                 .join(" ");
 

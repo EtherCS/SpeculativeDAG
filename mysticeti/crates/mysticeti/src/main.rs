@@ -6,7 +6,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use clap::{command, Parser, ValueEnum};
@@ -85,6 +85,9 @@ enum Operation {
         /// Path to the file holding the client parameters (for benchmarks).
         #[clap(long, value_name = "FILE")]
         client_parameters_path: String,
+        /// Unix timestamp in milliseconds at which this validator should start.
+        #[clap(long, value_name = "MILLISECONDS")]
+        benchmark_start_unix_ms: Option<u64>,
     },
     /// Deploy a local validator for test. Dryrun mode uses default keys and committee configurations.
     DryRun {
@@ -193,7 +196,9 @@ async fn main() -> Result<()> {
             public_config_path,
             private_config_path,
             client_parameters_path,
+            benchmark_start_unix_ms,
         } => {
+            wait_for_benchmark_start(authority, benchmark_start_unix_ms).await;
             run(
                 authority,
                 committee_path,
@@ -259,6 +264,29 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn wait_for_benchmark_start(authority: AuthorityIndex, start_unix_ms: Option<u64>) {
+    let Some(start_unix_ms) = start_unix_ms else {
+        return;
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let target = Duration::from_millis(start_unix_ms);
+    if let Some(delay) = target.checked_sub(now) {
+        tracing::info!(
+            "Validator {authority} waiting {:.3}s for coordinated benchmark start",
+            delay.as_secs_f64()
+        );
+        tokio::time::sleep(delay).await;
+    } else {
+        tracing::warn!(
+            "Validator {authority} missed coordinated benchmark start by {:.3}s; starting now",
+            now.saturating_sub(target).as_secs_f64()
+        );
+    }
 }
 
 fn benchmark_genesis(
