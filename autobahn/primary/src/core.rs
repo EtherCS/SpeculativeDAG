@@ -407,11 +407,6 @@ impl Core {
         // Store the header since we have the parents (recursively).
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.digest().to_vec(), bytes).await;
-        let _ = self
-            .tx_execution
-            .send(ExecutionRequest::Proposed(header.clone()))
-            .await;
-
         // If the header received is at a greater height then add it to our local tips and proposals
         if self.use_optimistic_tips && header.height() > self.current_proposal_tips.get(&header.origin()).unwrap().height {
             self.current_proposal_tips.insert(
@@ -1482,6 +1477,11 @@ impl Core {
         prepare_message: &ConsensusMessage,
         consensus_sigs: &mut Vec<(Slot, Digest, Signature)>,
     ) {
+        let _ = self
+            .tx_execution
+            .send(ExecutionRequest::Proposed(prepare_message.clone()))
+            .await;
+
         match prepare_message {
             ConsensusMessage::Prepare {
                 slot,

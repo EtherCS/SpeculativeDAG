@@ -13,12 +13,60 @@ use std::path::PathBuf;
 use store::Store;
 use tokio::sync::mpsc::Receiver;
 
-use crate::Header;
+use crate::messages::{ConsensusMessage, Proposal};
+use crate::{Header, Slot, View};
 
 #[derive(Clone, Debug)]
 pub(crate) enum ExecutionRequest {
-    Committed(Header),
-    Proposed(Header),
+    Committed(ConsensusMessage),
+    Proposed(ConsensusMessage),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct ProposalKey {
+    slot: Slot,
+    view: View,
+    // HashMap iteration order is randomized, so proposal identity must be canonical.
+    proposals: Vec<(PublicKey, u64, Digest)>,
+}
+
+impl ProposalKey {
+    fn from_message(message: &ConsensusMessage) -> Option<Self> {
+        let (slot, view, proposals) = match message {
+            ConsensusMessage::Prepare {
+                slot,
+                view,
+                proposals,
+                ..
+            }
+            | ConsensusMessage::Commit {
+                slot,
+                view,
+                proposals,
+                ..
+            } => (*slot, *view, proposals),
+            ConsensusMessage::Confirm { .. } => return None,
+        };
+
+        let mut proposals = proposals
+            .iter()
+            .map(|(author, proposal)| (*author, proposal.height, proposal.header_digest))
+            .collect::<Vec<_>>();
+        proposals.sort_by_key(|(author, _, _)| *author);
+
+        Some(Self {
+            slot,
+            view,
+            proposals,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct SpeculativeProposalResult {
+    base_version: u64,
+    header_ids: Vec<Digest>,
+    write_set: EvmStateWriteSet,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,11 +155,10 @@ pub(crate) struct ExecutionService {
     store: Store,
     rx_execution: Receiver<ExecutionRequest>,
     committed_executor: PevmExecutor,
-    // Header id -> (committed-state version used as the speculative base, write set).
-    speculative_results: HashMap<Digest, (u64, EvmStateWriteSet)>,
+    // Consensus proposal -> result for its complete, ordered header sequence.
+    speculative_results: HashMap<ProposalKey, SpeculativeProposalResult>,
     committed_state_version: u64,
-    pending_committed_headers: HashMap<PublicKey, BTreeMap<u64, Header>>,
-    next_committed_height: HashMap<PublicKey, u64>,
+    committed_heights: HashMap<PublicKey, u64>,
 }
 
 impl ExecutionService {
@@ -160,8 +207,7 @@ impl ExecutionService {
                 committed_executor,
                 speculative_results: HashMap::new(),
                 committed_state_version: 0,
-                pending_committed_headers: HashMap::new(),
-                next_committed_height: HashMap::new(),
+                committed_heights: HashMap::new(),
             }
             .run()
             .await;
@@ -171,16 +217,15 @@ impl ExecutionService {
     async fn run(&mut self) {
         while let Some(request) = self.rx_execution.recv().await {
             match request {
-                ExecutionRequest::Committed(header) => {
-                    self.buffer_committed_header(header).await;
+                ExecutionRequest::Committed(message) => {
+                    if let Err(error) = self.execute_committed_proposal(&message).await {
+                        warn!("Committed EVM execution failed: {:?}", error);
+                    }
                 }
-                ExecutionRequest::Proposed(header) => {
+                ExecutionRequest::Proposed(message) => {
                     if self.config.strategy == ExecutionStrategy::SpeculativeAllCommit {
-                        if let Err(error) = self.execute_speculative_header(&header).await {
-                            warn!(
-                                "Speculative EVM execution failed for header {} at height {}: {:?}",
-                                header.id, header.height, error
-                            );
+                        if let Err(error) = self.execute_speculative_proposal(&message).await {
+                            warn!("Speculative EVM execution failed for Prepare: {:?}", error);
                         }
                     }
                 }
@@ -188,80 +233,68 @@ impl ExecutionService {
         }
     }
 
-    async fn buffer_committed_header(&mut self, header: Header) {
-        let author = header.author;
-        let height = header.height;
-        self.pending_committed_headers
-            .entry(author)
-            .or_default()
-            .insert(height, header);
+    async fn execute_committed_proposal(&mut self, message: &ConsensusMessage) -> Result<()> {
+        let key = ProposalKey::from_message(message)
+            .ok_or_else(|| anyhow!("execution received a non-Commit consensus message"))?;
+        let headers = self.load_proposal_headers(message).await?;
+        let header_ids = headers.iter().map(|header| header.id).collect::<Vec<_>>();
 
-        loop {
-            let expected = *self.next_committed_height.entry(author).or_insert(1);
-            let next_header = self
-                .pending_committed_headers
-                .get_mut(&author)
-                .and_then(|headers| headers.remove(&expected));
-
-            let Some(next_header) = next_header else {
-                break;
-            };
-
-            match self.execute_committed_header(&next_header).await {
-                Ok(()) => self.advance_committed_state(),
-                Err(error) => {
-                    warn!(
-                        "Committed EVM execution failed for header {} at height {}: {:?}",
-                        next_header.id, next_header.height, error
-                    );
-                }
-            }
-
-            self.next_committed_height.insert(author, expected + 1);
-        }
-    }
-
-    async fn execute_committed_header(&mut self, header: &Header) -> Result<()> {
-        if let Some((base_version, write_set)) = self.speculative_results.remove(&header.id) {
-            if base_version == self.committed_state_version {
+        let mut reused = false;
+        if let Some(result) = self.speculative_results.remove(&key) {
+            if result.base_version == self.committed_state_version
+                && result.header_ids == header_ids
+            {
                 info!(
-                    "Committing speculative result for header {} without re-execution",
-                    header.id
+                    "Committing speculative result for Prepare slot {} view {} ({} headers) without re-execution",
+                    key.slot,
+                    key.view,
+                    headers.len()
                 );
                 self.committed_executor
-                    .commit_speculative_execution(write_set);
-                self.log_execution_completion(header);
-                return Ok(());
+                    .commit_speculative_execution(result.write_set);
+                reused = true;
+            } else {
+                debug!(
+                    "Discarding stale or mismatched speculative result for slot {} view {} (base version {}, current version {})",
+                    key.slot,
+                    key.view,
+                    result.base_version,
+                    self.committed_state_version
+                );
             }
-
-            debug!(
-                "Discarding stale speculative result for header {} (base version {}, current version {})",
-                header.id,
-                base_version,
-                self.committed_state_version
-            );
         }
 
-        let txs = self.load_header_transactions(header).await?;
-        if txs.is_empty() {
-            return Ok(());
+        if !reused {
+            let txs = self.load_headers_transactions(&headers).await?;
+            if !txs.is_empty() {
+                info!(
+                    "Executing committed Prepare slot {} view {} with {} headers and {} EVM transactions",
+                    key.slot,
+                    key.view,
+                    headers.len(),
+                    txs.len()
+                );
+                self.committed_executor.execute_checked(txs)?;
+            }
         }
 
-        info!(
-            "Executing committed header {} with {} EVM transactions",
-            header.id,
-            txs.len()
-        );
-        self.committed_executor.execute_checked(txs)?;
-        self.log_execution_completion(header);
+        for header in &headers {
+            self.log_execution_completion(header);
+            self.committed_heights
+                .entry(header.author)
+                .and_modify(|height| *height = (*height).max(header.height))
+                .or_insert(header.height);
+        }
+        self.advance_committed_state(key.slot);
         Ok(())
     }
 
-    fn advance_committed_state(&mut self) {
+    fn advance_committed_state(&mut self, committed_slot: Slot) {
         self.committed_state_version += 1;
         let committed_state_version = self.committed_state_version;
-        self.speculative_results
-            .retain(|_, (base_version, _)| *base_version >= committed_state_version);
+        self.speculative_results.retain(|key, result| {
+            key.slot > committed_slot && result.base_version >= committed_state_version
+        });
     }
 
     fn log_execution_completion(&self, header: &Header) {
@@ -271,19 +304,94 @@ impl ExecutionService {
         }
     }
 
-    async fn execute_speculative_header(&mut self, header: &Header) -> Result<()> {
-        let txs = self.load_header_transactions(header).await?;
+    async fn execute_speculative_proposal(&mut self, message: &ConsensusMessage) -> Result<()> {
+        let key = ProposalKey::from_message(message)
+            .ok_or_else(|| anyhow!("speculation received a non-Prepare consensus message"))?;
+        if self.speculative_results.contains_key(&key) {
+            return Ok(());
+        }
+
+        let headers = self.load_proposal_headers(message).await?;
+        let txs = self.load_headers_transactions(&headers).await?;
 
         let mut speculative_executor = self.committed_executor.clone();
         debug!(
-            "Speculatively executing header {} with {} EVM transactions",
-            header.id,
+            "Speculatively executing Prepare slot {} view {} with {} headers and {} EVM transactions",
+            key.slot,
+            key.view,
+            headers.len(),
             txs.len()
         );
         let write_set = speculative_executor.speculative_execute(txs, EvmStateWriteSet::default());
-        self.speculative_results
-            .insert(header.id.clone(), (self.committed_state_version, write_set));
+        self.speculative_results.insert(
+            key,
+            SpeculativeProposalResult {
+                base_version: self.committed_state_version,
+                header_ids: headers.iter().map(|header| header.id).collect(),
+                write_set,
+            },
+        );
         Ok(())
+    }
+
+    async fn load_proposal_headers(
+        &mut self,
+        message: &ConsensusMessage,
+    ) -> Result<Vec<Header>> {
+        let proposals = match message {
+            ConsensusMessage::Prepare { proposals, .. }
+            | ConsensusMessage::Commit { proposals, .. } => proposals,
+            ConsensusMessage::Confirm { .. } => {
+                return Err(anyhow!("cannot execute a Confirm message"));
+            }
+        };
+
+        let mut proposals = proposals.iter().collect::<Vec<_>>();
+        proposals.sort_by_key(|(author, _)| **author);
+
+        let mut ordered = Vec::new();
+        for (author, proposal) in proposals {
+            let stop_height = self.committed_heights.get(author).copied().unwrap_or(0);
+            if proposal.height <= stop_height {
+                continue;
+            }
+            ordered.extend(self.load_proposal_chain(proposal, stop_height).await?);
+        }
+        Ok(ordered)
+    }
+
+    async fn load_proposal_chain(
+        &mut self,
+        proposal: &Proposal,
+        stop_height: u64,
+    ) -> Result<Vec<Header>> {
+        let mut headers = Vec::new();
+        let mut digest = proposal.header_digest;
+        let mut height = proposal.height;
+
+        while height > stop_height {
+            let bytes = self
+                .store
+                .read(digest.to_vec())
+                .await?
+                .ok_or_else(|| anyhow!("missing header {} at height {}", digest, height))?;
+            let header: Header = bincode::deserialize(&bytes)?;
+            digest = header.parent_cert.header_digest;
+            height = header.parent_cert.height;
+            headers.push(header);
+        }
+        Ok(headers)
+    }
+
+    async fn load_headers_transactions(
+        &mut self,
+        headers: &[Header],
+    ) -> Result<Vec<(String, Address)>> {
+        let mut txs = Vec::new();
+        for header in headers {
+            txs.extend(self.load_header_transactions(header).await?);
+        }
+        Ok(txs)
     }
 
     async fn load_header_transactions(

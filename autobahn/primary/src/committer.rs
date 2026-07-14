@@ -134,6 +134,8 @@ impl Committer {
                     debug!("Currently executing slot {:?}", state.last_executed_slot + 1);
                     match current_commit_message {
                         ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
+                            let mut proposals = proposals.iter().collect::<Vec<_>>();
+                            proposals.sort_by_key(|(pk, _)| **pk);
                             for (pk, proposal) in proposals {
                                 let stop_height = *state.last_executed_heights.get(pk).unwrap();
                                 // Don't execute proposals which are too old
@@ -164,13 +166,13 @@ impl Committer {
                                     if let Err(e) = self.tx_output.send(header.clone()).await {
                                         debug!("Failed to send block through the output channel: {}", e);
                                     }
-                                    let _ = self
-                                        .tx_execution
-                                        .send(ExecutionRequest::Committed(header.clone()))
-                                        .await;
                                     debug!("Finish upcall");
                                 }
                             }
+                            let _ = self
+                                .tx_execution
+                                .send(ExecutionRequest::Committed(current_commit_message.clone()))
+                                .await;
                             state.last_executed_slot += 1;
                         },
                         _ => {}
