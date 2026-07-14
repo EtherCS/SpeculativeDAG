@@ -14,7 +14,8 @@ use store::Store;
 use tokio::sync::mpsc::Receiver;
 
 use crate::messages::{ConsensusMessage, Proposal};
-use crate::{Header, Slot, View};
+use crate::Header;
+use crate::primary::{Slot, View};
 
 #[derive(Clone, Debug)]
 pub(crate) enum ExecutionRequest {
@@ -50,7 +51,7 @@ impl ProposalKey {
 
         let mut proposals = proposals
             .iter()
-            .map(|(author, proposal)| (*author, proposal.height, proposal.header_digest))
+            .map(|(author, proposal)| (*author, proposal.height, proposal.header_digest.clone()))
             .collect::<Vec<_>>();
         proposals.sort_by_key(|(author, _, _)| *author);
 
@@ -237,7 +238,7 @@ impl ExecutionService {
         let key = ProposalKey::from_message(message)
             .ok_or_else(|| anyhow!("execution received a non-Commit consensus message"))?;
         let headers = self.load_proposal_headers(message).await?;
-        let header_ids = headers.iter().map(|header| header.id).collect::<Vec<_>>();
+        let header_ids = headers.iter().map(|header| header.id.clone()).collect::<Vec<_>>();
 
         let mut reused = false;
         if let Some(result) = self.speculative_results.remove(&key) {
@@ -327,7 +328,7 @@ impl ExecutionService {
             key,
             SpeculativeProposalResult {
                 base_version: self.committed_state_version,
-                header_ids: headers.iter().map(|header| header.id).collect(),
+                header_ids: headers.iter().map(|header| header.id.clone()).collect(),
                 write_set,
             },
         );
@@ -366,7 +367,7 @@ impl ExecutionService {
         stop_height: u64,
     ) -> Result<Vec<Header>> {
         let mut headers = Vec::new();
-        let mut digest = proposal.header_digest;
+        let mut digest = proposal.header_digest.clone();
         let mut height = proposal.height;
 
         while height > stop_height {
@@ -376,7 +377,7 @@ impl ExecutionService {
                 .await?
                 .ok_or_else(|| anyhow!("missing header {} at height {}", digest, height))?;
             let header: Header = bincode::deserialize(&bytes)?;
-            digest = header.parent_cert.header_digest;
+            digest = header.parent_cert.header_digest.clone();
             height = header.parent_cert.height;
             headers.push(header);
         }
