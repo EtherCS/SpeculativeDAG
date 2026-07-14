@@ -163,6 +163,10 @@ impl UniversalCommitterBuilder {
     }
 
     pub fn build(self) -> UniversalCommitter {
+        if let Some(simulation) = self.direct_commit_stall.clone() {
+            Self::spawn_direct_commit_stall_notifier(simulation, self.validator_start);
+        }
+
         let mut committers = Vec::new();
         let pipeline_stages = if self.pipeline { self.wave_length } else { 1 };
         for round_offset in 0..pipeline_stages {
@@ -188,5 +192,34 @@ impl UniversalCommitterBuilder {
             committers,
             metrics: self.metrics,
         }
+    }
+
+    fn spawn_direct_commit_stall_notifier(
+        simulation: DirectCommitStallSimulation,
+        validator_start: Instant,
+    ) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let stall_start = validator_start + simulation.start_time;
+        let stall_end = stall_start + simulation.duration;
+
+        runtime.spawn(async move {
+            tokio::time::sleep_until(stall_start.into()).await;
+            tracing::info!(
+                start_seconds = simulation.start_time.as_secs(),
+                duration_seconds = simulation.duration.as_secs(),
+                "Direct-commit stall attack started"
+            );
+
+            tokio::time::sleep_until(stall_end.into()).await;
+            tracing::info!(
+                end_seconds = simulation
+                    .start_time
+                    .saturating_add(simulation.duration)
+                    .as_secs(),
+                "Direct-commit stall attack ended; direct decisions resumed"
+            );
+        });
     }
 }

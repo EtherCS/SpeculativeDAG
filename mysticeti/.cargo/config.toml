@@ -1,5 +1,0 @@
-[build]
-rustflags = ["-Awarnings"]
-
-[term]
-quiet = true
