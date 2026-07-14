@@ -267,6 +267,9 @@ impl Synchronizer {
             current_height = header.height();
         }
 
+        // Walks start at the proposal tip, but committed execution order is
+        // parent-to-child so account nonces and state dependencies are preserved.
+        ancestors.reverse();
         Ok(ancestors)
     }
 

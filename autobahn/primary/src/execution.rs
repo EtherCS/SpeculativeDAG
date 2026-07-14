@@ -8,7 +8,7 @@ use pevm::api::{
     ExecutionMode as PevmExecutionMode, PevmExecutor, TransactionWithHint, WorkloadType,
 };
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use store::Store;
 use tokio::sync::mpsc::Receiver;
@@ -381,6 +381,9 @@ impl ExecutionService {
             height = header.parent_cert.height;
             headers.push(header);
         }
+        // Proposal tips point backwards. EVM transactions must execute from the
+        // oldest uncommitted header to the newest to preserve account nonces.
+        headers.reverse();
         Ok(headers)
     }
 

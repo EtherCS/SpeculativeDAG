@@ -153,7 +153,8 @@ pub struct Core {
     order_stall_start_time: Instant,
     benchmark_start_unix_ms: u64,
     order_stall_delayed_prepares: HashMap<Slot, ConsensusMessage>,
-    order_stall_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    // false marks the shared attack start boundary; true marks its end.
+    order_stall_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = bool> + Send>>>,
 }
 
 impl Core {
@@ -2134,7 +2135,14 @@ impl Core {
                 "Order-stall attack enabled: withholding Prepare messages during [{} ms, {} ms)",
                 self.order_stall_start, stall_end
             );
-            let timer_delay = if self.benchmark_start_unix_ms == 0 {
+            let start_delay = if self.benchmark_start_unix_ms == 0 {
+                self.order_stall_start
+            } else {
+                self.benchmark_start_unix_ms
+                    .saturating_add(self.order_stall_start)
+                    .saturating_sub(unix_time_ms())
+            };
+            let end_delay = if self.benchmark_start_unix_ms == 0 {
                 stall_end
             } else {
                 self.benchmark_start_unix_ms
@@ -2142,7 +2150,15 @@ impl Core {
                     .saturating_sub(unix_time_ms())
             };
             self.order_stall_timer_futures
-                .push(Box::pin(sleep(Duration::from_millis(timer_delay))));
+                .push(Box::pin(async move {
+                    sleep(Duration::from_millis(start_delay)).await;
+                    false
+                }));
+            self.order_stall_timer_futures
+                .push(Box::pin(async move {
+                    sleep(Duration::from_millis(end_delay)).await;
+                    true
+                }));
         }
 
         //Simulate asynchrony duration:
@@ -2262,15 +2278,20 @@ impl Core {
                 //Fast path loopback for external consensus
                 Some(vote) = self.fast_timer_futures.next() => self.process_consensus_vote(vote, true).await,
 
-                Some(()) = self.order_stall_timer_futures.next() => {
-                    let delayed_prepares = std::mem::take(&mut self.order_stall_delayed_prepares);
-                    for (slot, delayed_prepare) in delayed_prepares {
-                        // Release the latest prepare retained by this leader even if a
-                        // local timeout raced with stall expiry. Receivers still verify
-                        // the TC and view, so stale prepares are safely ignored while a
-                        // higher valid prepare can synchronize lagging replicas.
-                        info!("Order-stall attack ended: releasing Prepare for slot {}", slot);
-                        let _ = self.send_consensus_req(delayed_prepare).await;
+                Some(attack_ended) = self.order_stall_timer_futures.next() => {
+                    if attack_ended {
+                        info!("Order-stall attack ended");
+                        let delayed_prepares = std::mem::take(&mut self.order_stall_delayed_prepares);
+                        for (slot, delayed_prepare) in delayed_prepares {
+                            // Release the latest prepare retained by this leader even if a
+                            // local timeout raced with stall expiry. Receivers still verify
+                            // the TC and view, so stale prepares are safely ignored while a
+                            // higher valid prepare can synchronize lagging replicas.
+                            info!("Order-stall attack: releasing Prepare for slot {}", slot);
+                            let _ = self.send_consensus_req(delayed_prepare).await;
+                        }
+                    } else {
+                        info!("Order-stall attack started");
                     }
                     Ok(())
                 },
