@@ -611,6 +611,27 @@ impl<H: BlockHandler> Core<H> {
                     &self.block_store,
                     remaining_predicted_committed_leaders.clone(),
                 );
+
+                // The consensus message above repairs the executor's committed base. Re-execute
+                // the still-pending APS suffix afterwards so its snapshots are rooted at that
+                // repaired state. The channel is FIFO, so this cannot run before the repair.
+                if !self.aps_tree_sub_dags.is_empty() {
+                    self.metrics
+                        .speculative_messages_total
+                        .with_label_values(&["speculative_repair"])
+                        .inc();
+                    self.speculative_message_sender
+                        .blocking_send(SpeculativeMessage::ExecuteTxs(
+                            self.aps_tree.clone(),
+                            self.aps_tree_sub_dags.clone(),
+                            SpeculativeMessageStatus::Speculative,
+                        ))
+                        .expect("Failed to send repaired APS suffix to speculative executor");
+                    tracing::debug!(
+                        "Replaying {} pending speculative sub-DAGs after consensus repair",
+                        self.aps_tree_sub_dags.len()
+                    );
+                }
             }
         } else {
             self.speculative_message_sender
