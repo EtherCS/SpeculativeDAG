@@ -19,6 +19,10 @@ Run `fab install` after creating or replacing instances; it installs the native
 Rust build dependencies, including `pkg-config` and the OpenSSL development
 headers, on every remote node.
 
+For large testbeds, installation uses at most eight concurrent SSH sessions and
+retries each host up to four times. It installs required packages without a full
+OS upgrade, avoiding handshake and package-mirror overload during provisioning.
+
 ## Quick Start
 
 Run the benchmark from the `autobahn/benchmark` directory:
@@ -173,6 +177,31 @@ Each run directory contains:
 - `latencies.txt`: sampled end-to-end latency records written by the parser
 
 `fab logs` parses the latest run folder under `autobahn/benchmark/logs`.
+
+To summarize a `[START, END)` range after clients start sending, run:
+
+```bash
+python3 summarize_window.py logs/bench-0-10-500-ordered-erc20-sequential-attack-20260714-233710 10 20
+```
+
+The script prints the same summary format as the normal benchmark parser. `START` and `END` are seconds
+relative to the earliest client start timestamp. Throughput counts commits inside `[START, END)` and
+divides by `END - START`. Latency uses transactions and proposals created inside the range, including
+their completion after the end boundary. This cohort behavior
+ensures that requests delayed by an order stall are not silently excluded. Use `--faults N` when the
+fault count cannot be inferred from a `bench-N-...` directory name.
+
+> Note: To get an accurate commit latency under attack on AWS, `START`=`Time_Replica_Start_Attack` - `Time_Client_Start_Sending_Tx` and `END`=`START`+1. This will calculate the commit latency of first transaction sent after the attack starts, and will reflect the recovery time. For instance,
+```
+# Client log:
+[2026-07-15T01:14:00.127Z INFO  benchmark_client] Start sending transactions
+[2026-07-15T01:14:00.128Z INFO  benchmark_client] Sending sample transaction 1784078040128800
+...
+
+#Primary log:
+[2026-07-15T01:14:05.329Z INFO  primary::core] Order-stall attack started
+```
+> Then `START`=5, `END`=6.
 
 ## Reading the Summary
 

@@ -9,7 +9,7 @@ from datetime import datetime
 from time import sleep, time
 from math import ceil
 from copy import deepcopy
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import subprocess
 
 from benchmark.config import Committee, Key, NodeParameters, BenchParameters, ConfigError
@@ -33,6 +33,9 @@ class ExecutionError(Exception):
 
 
 class Bench:
+    INSTALL_CONCURRENCY = 8
+    INSTALL_ATTEMPTS = 4
+
     def __init__(self, ctx):
         self.manager = InstanceManager.make()
         self.settings = self.manager.settings
@@ -50,9 +53,9 @@ class Bench:
                 'allow_agent': False,
                 'look_for_keys': False,
                 # VPN routes can make concurrent SSH handshakes considerably slower.
-                'timeout': 60,
-                'banner_timeout': 60,
-                'auth_timeout': 60,
+                'timeout': 120,
+                'banner_timeout': 120,
+                'auth_timeout': 120,
             })
         except (IOError, PasswordRequiredException, SSHException) as e:
             raise BenchError('Failed to load SSH key', e)
@@ -156,11 +159,9 @@ class Bench:
         repo_root = self.settings.repo_name.split('/')[0]
         cmd = [
             'sudo apt-get update',
-            'sudo apt-get -y upgrade',
-            'sudo apt-get -y autoremove',
-
             # Native dependencies for RocksDB, bindgen, and openssl-sys.
-            'sudo apt-get -y install build-essential cmake clang '
+            'sudo DEBIAN_FRONTEND=noninteractive apt-get -y install '
+            'build-essential cmake clang '
             'pkg-config libssl-dev',
 
             # Install rust (non-interactive).
@@ -177,13 +178,41 @@ class Bench:
         ]
         hosts = self.manager.hosts(flat=True)
         print(hosts)
-        try:
-            g = Group(*hosts, user=self.settings.username, connect_kwargs=self.connect)
-            g.run(' && '.join(cmd), hide=True)
-            Print.heading(f'Initialized testbed of {len(hosts)} nodes')
-        except (GroupException, ExecutionError) as e:
-            e = FabricError(e) if isinstance(e, GroupException) else e
-            raise BenchError('Failed to install repo on testbed', e)
+        command = ' && '.join(cmd)
+        concurrency = min(self.INSTALL_CONCURRENCY, len(hosts))
+        failures = []
+
+        # Bound SSH fan-out so large testbeds do not overload handshakes or mirrors.
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {
+                executor.submit(
+                    self._run_remote_command,
+                    host,
+                    command,
+                    self.INSTALL_ATTEMPTS,
+                ): host
+                for host in hosts
+            }
+            completed = 0
+            for future in as_completed(futures):
+                host = futures[future]
+                try:
+                    future.result()
+                except Exception as error:
+                    failures.append(f'{host}: {error}')
+                completed += 1
+                Print.info(f'Installed nodes: {completed}/{len(hosts)}')
+
+        if failures:
+            details = '\n'.join(failures)
+            raise BenchError(
+                'Failed to install repo on testbed',
+                ExecutionError(
+                    f'{len(failures)} of {len(hosts)} hosts failed:\n{details}'
+                ),
+            )
+
+        Print.heading(f'Initialized testbed of {len(hosts)} nodes')
 
     def kill(self, hosts=[], delete_logs=False):
         assert isinstance(hosts, list)
