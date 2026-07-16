@@ -18,6 +18,8 @@ WORKLOAD=${7:-erc20}
 OUTPUT_DIR=${8:-"./results/attack-${EXPERIMENT_MODE}-${WORKLOAD}-${COMMITTEE_SIZE}-$(date +%Y%m%d-%H%M%S)"}
 SKIP_BUILD=${SKIP_BUILD:-0}
 RESOURCE_MONITOR_INTERVAL=${RESOURCE_MONITOR_INTERVAL:-1}
+PREDICTION_ERROR_RATE=${PREDICTION_ERROR_RATE:-0}
+PREDICTION_ERROR_SEED=${PREDICTION_ERROR_SEED:-0}
 RESOURCE_MONITOR_PID=""
 
 if (( STALL_END <= STALL_START )); then
@@ -26,6 +28,10 @@ if (( STALL_END <= STALL_START )); then
 fi
 if (( DURATION <= STALL_END )); then
     echo "DURATION must be greater than STALL_END so recovery can be measured" >&2
+    exit 2
+fi
+if (( PREDICTION_ERROR_RATE < 0 || PREDICTION_ERROR_RATE > 100 )); then
+    echo "PREDICTION_ERROR_RATE must be between 0 and 100" >&2
     exit 2
 fi
 if [[ "${OUTPUT_DIR}" != /* ]]; then
@@ -64,7 +70,7 @@ trap cleanup EXIT
 echo "Starting attack run in mode=${EXPERIMENT_MODE} workload=${WORKLOAD} stall=[${STALL_START},${STALL_END})..."
 
 for i in $(seq 0 $((COMMITTEE_SIZE - 1))); do
-    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && exec ${BIN_PATH} attack-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --stall-start ${STALL_START} --stall-end ${STALL_END} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
+    tmux new -d -s "v${i}" "cd ${PROJECT_ROOT} && exec ${BIN_PATH} attack-run --authority ${i} --committee-size ${COMMITTEE_SIZE} --stall-start ${STALL_START} --stall-end ${STALL_END} --load ${LOAD} --experiment-mode ${EXPERIMENT_MODE} --workload ${WORKLOAD} --prediction-error-rate ${PREDICTION_ERROR_RATE} --prediction-error-seed ${PREDICTION_ERROR_SEED} > ${OUTPUT_DIR}/v${i}.log.ansi 2>&1"
     validator_pid=$(tmux display-message -p -t "v${i}:0.0" '#{pane_pid}')
     printf '%s\n' "${validator_pid}" > "${OUTPUT_DIR}/validator-${i}.pid"
     register_validator_pid "${validator_pid}"
@@ -94,6 +100,8 @@ load=${LOAD}
 experiment_mode=${EXPERIMENT_MODE}
 workload=${WORKLOAD}
 resource_monitor_interval=${RESOURCE_MONITOR_INTERVAL}
+prediction_error_rate=${PREDICTION_ERROR_RATE}
+prediction_error_seed=${PREDICTION_ERROR_SEED}
 EOF
 
 if [ -f "${SCRIPT_DIR}/summarize_metrics.py" ]; then

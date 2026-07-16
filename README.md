@@ -371,6 +371,46 @@ python3 scripts/summarize_metrics.py ./results > ./results/summary.csv
 
 When multiple run directories share the same parameters, the summarizer emits additional rows with `validator=repeat_average` so repeated experiments can be compared in the same CSV file.
 
+## Operating-Envelope Sweeps
+
+The load-by-stall-duration sweep compares Pufferfish (`full`) with MysticetiEAC (`eac`) at
+every point in a configurable matrix:
+
+```bash
+SKIP_BUILD=1 bash mysticeti/scripts/load_stall_sweep.sh 3 ./results/load-stall-sweep
+```
+
+The positional arguments are the repeat count and output directory. The defaults are
+`LOADS="25 50 75 100 125"`, `STALL_DURATIONS="0 5 10 20 40"`,
+`COMMITTEE_SIZE=7`, `STALL_START=10`, and `RECOVERY_DURATION=30`. Override them with
+environment variables, for example:
+
+```bash
+SKIP_BUILD=1 LOADS="50 100" STALL_DURATIONS="0 10 30" WORKLOAD=weth \
+  bash mysticeti/scripts/load_stall_sweep.sh 2 ./results/load-stall-weth
+```
+
+Completed cells are skipped when the command is resumed. At the end, the script writes:
+
+- `load-stall-summary.csv`: p50/p99 latency in microseconds and the Pufferfish-to-EAC p99 ratio for each cell.
+- `load-stall-heatmap.pdf` and `load-stall-heatmap.png`: the latency-ratio heatmap.
+
+The prediction-hit-rate sweep injects deterministic errors after APS computes each prediction and
+plots latency against the hit rate actually observed by consensus:
+
+```bash
+SKIP_BUILD=1 bash mysticeti/scripts/prediction_hit_rate_sweep.sh 3 \
+  ./results/prediction-hit-rate-sweep
+```
+
+Its defaults are `ERROR_RATES="0 10 25 50 75 100"`, `LOAD=100`,
+`STALL_DURATION=20`, and `BASE_SEED=2027`. Each repeat uses a distinct deterministic seed.
+The injected percentage is a stress-control input; because a missing leader cannot be converted
+into an executable commit prediction, the paper-facing x-axis uses the measured hit rate.
+The script also runs MysticetiEAC once per repeat as a crossover reference. It writes
+`prediction-hit-rate-summary.csv`,
+`prediction-hit-rate-sweep.pdf`, and `prediction-hit-rate-sweep.png`.
+
 The summary currently extracts the most useful paper-facing metrics, including:
 
 - `transaction_committed_latency`

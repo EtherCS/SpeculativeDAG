@@ -163,6 +163,12 @@ enum Operation {
         /// Contract workload used for evaluation.
         #[clap(long, value_enum, default_value_t = WorkloadPreset::Erc20)]
         workload: WorkloadPreset,
+        /// Percentage of APS predictions deterministically replaced by the opposite prediction.
+        #[clap(long, value_name = "PERCENT", default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=100))]
+        prediction_error_rate: u8,
+        /// Seed used by deterministic prediction-error injection.
+        #[clap(long, value_name = "INT", default_value_t = 0)]
+        prediction_error_seed: u64,
     },
 }
 
@@ -249,6 +255,8 @@ async fn main() -> Result<()> {
             load,
             experiment_mode,
             workload,
+            prediction_error_rate,
+            prediction_error_seed,
         } => {
             attackrun(
                 authority,
@@ -258,6 +266,8 @@ async fn main() -> Result<()> {
                 load,
                 experiment_mode,
                 workload,
+                prediction_error_rate,
+                prediction_error_seed,
             )
             .await?;
         }
@@ -573,6 +583,8 @@ async fn attackrun(
     load: usize,
     experiment_mode: ExperimentMode,
     workload: WorkloadPreset,
+    prediction_error_rate: u8,
+    prediction_error_seed: u64,
 ) -> Result<()> {
     if stall_end <= stall_start {
         return Err(eyre!(
@@ -592,7 +604,8 @@ async fn attackrun(
     let mut node_parameters = apply_experiment_mode(
         NodeParameters::default().with_pevm_workload_type(workload_type),
         experiment_mode,
-    );
+    )
+    .with_prediction_errors(prediction_error_rate, prediction_error_seed);
     node_parameters.direct_commit_stall_simulation = Some(DirectCommitStallSimulation::new(
         Duration::from_secs(stall_start),
         Duration::from_secs(stall_end - stall_start),

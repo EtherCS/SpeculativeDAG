@@ -71,6 +71,8 @@ pub struct Core<H: BlockHandler> {
     speculative_linearizer: Linearizer,
     enable_speculative_execution: bool,
     speculation_prediction_policy: SpeculationPredictionPolicy,
+    prediction_error_rate_percent: u8,
+    prediction_error_seed: u64,
 }
 
 pub struct CoreOptions {
@@ -204,6 +206,8 @@ impl<H: BlockHandler> Core<H> {
             speculative_linearizer,
             enable_speculative_execution: public_config.parameters.enable_speculative_execution,
             speculation_prediction_policy: public_config.parameters.speculation_prediction_policy,
+            prediction_error_rate_percent: public_config.parameters.prediction_error_rate_percent,
+            prediction_error_seed: public_config.parameters.prediction_error_seed,
         };
 
         if !unprocessed_blocks.is_empty() {
@@ -440,6 +444,7 @@ impl<H: BlockHandler> Core<H> {
                 SpeculationPredictionPolicy::AllCommit => self.predict_all_commit_leader_status(r),
                 SpeculationPredictionPolicy::AllSkip => self.predict_all_skip_leader_status(r),
             };
+            let leader_status = self.maybe_inject_prediction_error(r, leader_status);
             let leader_prediction = match leader_status {
                 LeaderStatus::Commit(leader_block) => LeaderPrediction::new(
                     r,
@@ -462,6 +467,33 @@ impl<H: BlockHandler> Core<H> {
             new_predicted_leaders.push(leader_prediction);
         }
         new_predicted_leaders
+    }
+
+    fn maybe_inject_prediction_error(
+        &self,
+        round: RoundNumber,
+        leader_status: LeaderStatus,
+    ) -> LeaderStatus {
+        if self.prediction_error_rate_percent == 0 {
+            return leader_status;
+        }
+
+        // SplitMix64 gives each (seed, authority, round) tuple a stable pseudo-random sample.
+        let mut value =
+            self.prediction_error_seed ^ ((self.authority as u64) << 32) ^ u64::from(round);
+        value = value.wrapping_add(0x9E3779B97F4A7C15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D049BB133111EB);
+        let sample = (value ^ (value >> 31)) % 100;
+        if sample >= u64::from(self.prediction_error_rate_percent) {
+            return leader_status;
+        }
+
+        match leader_status {
+            LeaderStatus::Commit(block) => LeaderStatus::Skip(block.author(), round),
+            LeaderStatus::Skip(_, _) => self.predict_all_commit_leader_status(round),
+            undecided @ LeaderStatus::Undecided(_, _) => undecided,
+        }
     }
 
     fn predict_all_commit_leader_status(&self, round: RoundNumber) -> LeaderStatus {

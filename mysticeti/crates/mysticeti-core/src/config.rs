@@ -58,6 +58,10 @@ pub struct NodeParameters {
     pub pevm_workload_type: pevm::api::WorkloadType,
     #[serde(default = "node_defaults::default_speculation_prediction_policy")]
     pub speculation_prediction_policy: SpeculationPredictionPolicy,
+    #[serde(default = "node_defaults::default_prediction_error_rate_percent")]
+    pub prediction_error_rate_percent: u8,
+    #[serde(default = "node_defaults::default_prediction_error_seed")]
+    pub prediction_error_seed: u64,
     #[serde(default = "node_defaults::default_snapshot_policy")]
     pub speculation_snapshot_policy: SpeculationSnapshotPolicy,
     #[serde(default = "node_defaults::default_reputation_threshold_deviation")]
@@ -141,6 +145,14 @@ pub mod node_defaults {
         super::SpeculationPredictionPolicy::Adaptive
     }
 
+    pub fn default_prediction_error_rate_percent() -> u8 {
+        0
+    }
+
+    pub fn default_prediction_error_seed() -> u64 {
+        0
+    }
+
     pub fn default_snapshot_policy() -> super::SpeculationSnapshotPolicy {
         super::SpeculationSnapshotPolicy::Adaptive
     }
@@ -187,6 +199,8 @@ impl Default for NodeParameters {
             enable_speculative_execution: node_defaults::default_enable_speculative_execution(),
             pevm_workload_type: node_defaults::default_pevm_workload_type(),
             speculation_prediction_policy: node_defaults::default_speculation_prediction_policy(),
+            prediction_error_rate_percent: node_defaults::default_prediction_error_rate_percent(),
+            prediction_error_seed: node_defaults::default_prediction_error_seed(),
             speculation_snapshot_policy: node_defaults::default_snapshot_policy(),
             reputation_threshold_deviation: node_defaults::default_reputation_threshold_deviation(),
             reputation_threshold_numerator: node_defaults::default_reputation_threshold_numerator(),
@@ -217,6 +231,13 @@ impl NodeParameters {
         policy: SpeculationPredictionPolicy,
     ) -> Self {
         self.speculation_prediction_policy = policy;
+        self
+    }
+
+    pub fn with_prediction_errors(mut self, rate_percent: u8, seed: u64) -> Self {
+        assert!(rate_percent <= 100, "prediction error rate must be <= 100");
+        self.prediction_error_rate_percent = rate_percent;
+        self.prediction_error_seed = seed;
         self
     }
 
