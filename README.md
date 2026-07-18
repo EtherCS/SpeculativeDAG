@@ -417,6 +417,14 @@ transaction_committed_latency{v="sum"} 3690243727
 - The current scripts are designed for local experimentation and paper evaluation, not production deployment.
 - `cargo fmt --all` may also reformat files in the sibling `pevm` dependency if both live in the same workspace checkout.
 
+## Evaluation on AutobahnEVM
+
+Please see [AutobahnEVM](https://anonymous.4open.science/r/AutobahnEVM-C5BA/README.md).
+
+## Evaluation on AWS
+
+Will add detailed instructions after the paper is public.
+
 ## License
 
 This software is licensed as [Apache 2.0](LICENSE).
