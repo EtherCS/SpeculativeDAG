@@ -4,9 +4,7 @@
 [![rustc](https://img.shields.io/badge/rustc-1.78+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![license](https://img.shields.io/badge/license-Apache-blue.svg?style=flat-square)](LICENSE)
 
-The code in this branch is a prototype of Pufferfish. It supplements the paper [Masking Ordering Failures in BFT SMR via DAG-based Proactive Pre-Commit Execution](https://eprint.iacr.org/2026/796.pdf) enabling reproducible results. There are no plans to maintain this branch.
-
-This fork also contains an experimental prototype for speculative pre-commit execution, together with local scripts for latency experiments, ablation studies, and microbenchmarks.
+The code in this branch is a prototype of Autobahn + EVM.
 
 ## Build
 
