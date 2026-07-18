@@ -4,7 +4,7 @@ mysticeti/scripts/*.log
 mysticeti/scripts/*.txt
 mysticeti/scripts/*.pdf
 mysticeti/scripts/results/*
-mysticeti/results/*
+/mysticeti/results/*
 mysticeti/target/*
 pevm/target/*
 pevm/crates/pevm/target/*
