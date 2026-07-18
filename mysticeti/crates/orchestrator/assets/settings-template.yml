@@ -19,7 +19,7 @@ regions:
   # - ap-northeast-2
 specs: t3.xlarge
 repository:
-  url: https://github.com/EtherCS/SpeculativeDAG.git
+  url: YOUR_GITHUB_PROJECT
   commit: dev-attack
 node_parameters_path: "crates/orchestrator/assets/node-parameters.yml"
 account_storage_path: "crates/orchestrator/assets/storage_5_5_8.json"
