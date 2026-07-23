@@ -1,7 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::VecDeque, sync::Arc, time::Instant};
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use super::{base_committer::BaseCommitter, LeaderStatus, DEFAULT_WAVE_LENGTH};
 use crate::{
@@ -10,6 +14,7 @@ use crate::{
     config::DirectCommitStallSimulation,
     consensus::base_committer::BaseCommitterOptions,
     metrics::Metrics,
+    runtime,
     types::{AuthorityIndex, BlockReference, RoundNumber},
 };
 
@@ -123,6 +128,7 @@ pub struct UniversalCommitterBuilder {
     pipeline: bool,
     direct_commit_stall: Option<DirectCommitStallSimulation>,
     validator_start: Instant,
+    validator_start_utc: Duration,
 }
 
 impl UniversalCommitterBuilder {
@@ -136,6 +142,7 @@ impl UniversalCommitterBuilder {
             pipeline: false,
             direct_commit_stall: None,
             validator_start: Instant::now(),
+            validator_start_utc: runtime::timestamp_utc(),
         }
     }
 
@@ -164,6 +171,14 @@ impl UniversalCommitterBuilder {
 
     pub fn build(self) -> UniversalCommitter {
         if let Some(simulation) = self.direct_commit_stall.clone() {
+            let stall_start_ms = self
+                .validator_start_utc
+                .saturating_add(simulation.start_time)
+                .as_millis()
+                .min(i64::MAX as u128) as i64;
+            self.metrics
+                .direct_commit_stall_start_timestamp_ms
+                .set(stall_start_ms);
             Self::spawn_direct_commit_stall_notifier(simulation, self.validator_start);
         }
 

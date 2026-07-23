@@ -77,6 +77,9 @@ pub struct Metrics {
     pub speculative_reexecuted_leaders_total: IntCounter,
     pub speculative_snapshot_window_size: IntGauge,
     pub speculative_snapshot_store_size: IntGauge,
+    pub direct_commit_stall_start_timestamp_ms: IntGauge,
+    pub boundary_transaction_submission_timestamp_ms: IntGauge,
+    pub boundary_transaction_commit_latency_us: IntGauge,
 
     pub proposed_block_size_bytes: HistogramSender<usize>,
     pub proposed_block_transaction_count: HistogramSender<usize>,
@@ -398,6 +401,24 @@ impl Metrics {
             speculative_snapshot_store_size: register_int_gauge_with_registry!(
                 "speculative_snapshot_store_size",
                 "Current number of retained speculative snapshots outside the sliding window",
+                registry,
+            )
+            .unwrap(),
+            direct_commit_stall_start_timestamp_ms: register_int_gauge_with_registry!(
+                "direct_commit_stall_start_timestamp_ms",
+                "Unix timestamp in milliseconds at which the direct-commit stall starts",
+                registry,
+            )
+            .unwrap(),
+            boundary_transaction_submission_timestamp_ms: register_int_gauge_with_registry!(
+                "boundary_transaction_submission_timestamp_ms",
+                "Submission timestamp of the latest committed transaction submitted before the direct-commit stall boundary",
+                registry,
+            )
+            .unwrap(),
+            boundary_transaction_commit_latency_us: register_int_gauge_with_registry!(
+                "boundary_transaction_commit_latency_us",
+                "Commit latency in microseconds of the transaction selected at the direct-commit stall boundary",
                 registry,
             )
             .unwrap(),

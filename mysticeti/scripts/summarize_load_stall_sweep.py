@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Summarize and plot the load-by-stall-duration operating envelope."""
+"""Summarize boundary-transaction latency for the load-by-stall sweep."""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,36 +14,46 @@ from pathlib import Path
 
 @dataclass
 class Observation:
-    p50_us: float | None
-    p99_us: float | None
+    boundary_latency_us: float | None
+    validators: int
 
 
-def metric_value(path: Path, metric: str, label: str) -> float | None:
-    values = []
-    with path.open(newline="") as stream:
-        for row in csv.DictReader(stream):
-            if (
-                row.get("validator") == "average"
-                and row.get("metric") == metric
-                and row.get("labels") == label
-            ):
-                values.append(float(row["value"]))
-    return sum(values) / len(values) if values else None
+BOUNDARY_METRIC_RE = re.compile(
+    r"^boundary_transaction_commit_latency_us\s+([0-9eE+.\-]+)$"
+)
+
+
+def boundary_latency(path: Path) -> float | None:
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            match = BOUNDARY_METRIC_RE.match(line.strip())
+            if match:
+                value = float(match.group(1))
+                return value if value > 0 else None
+    return None
+
+
+def run_observation(run_dir: Path) -> Observation:
+    values = [
+        value
+        for metric_file in sorted(run_dir.glob("validator-*.metrics"))
+        if (value := boundary_latency(metric_file)) is not None
+    ]
+    return Observation(
+        boundary_latency_us=sum(values) / len(values) if values else None,
+        validators=len(values),
+    )
 
 
 def discover(root: Path):
     grouped = defaultdict(list)
-    for summary in root.glob("*/load-*/stall-*/repeat-*/summary.csv"):
-        parts = summary.relative_to(root).parts
+    for run_meta in root.glob("*/load-*/stall-*/repeat-*/run-meta.txt"):
+        run_dir = run_meta.parent
+        parts = run_dir.relative_to(root).parts
         mode = parts[0]
         load = int(parts[1].removeprefix("load-"))
         stall = int(parts[2].removeprefix("stall-"))
-        grouped[(mode, load, stall)].append(
-            Observation(
-                metric_value(summary, "transaction_committed_latency", "v=p50"),
-                metric_value(summary, "transaction_committed_latency", "v=p99"),
-            )
-        )
+        grouped[(mode, load, stall)].append(run_observation(run_dir))
     return grouped
 
 
@@ -57,26 +68,34 @@ def write_csv(path: Path, grouped):
     for key, observations in grouped.items():
         aggregate[key] = (
             len(observations),
-            mean(item.p50_us for item in observations),
-            mean(item.p99_us for item in observations),
+            min((item.validators for item in observations), default=0),
+            mean(item.boundary_latency_us for item in observations),
         )
 
     with path.open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(
-            ["mode", "load_tps", "stall_duration_s", "runs", "p50_us", "p99_us", "p99_vs_eac"]
+            [
+                "mode",
+                "load_tps",
+                "stall_duration_s",
+                "runs",
+                "min_validators",
+                "boundary_commit_latency_us",
+                "boundary_latency_vs_eac",
+            ]
         )
-        for (mode, load, stall), (runs, p50, p99) in sorted(aggregate.items()):
-            eac = aggregate.get(("eac", load, stall), (0, None, None))[2]
-            ratio = p99 / eac if p99 is not None and eac not in (None, 0) else None
+        for (mode, load, stall), (runs, validators, latency) in sorted(aggregate.items()):
+            eac = aggregate.get(("eac", load, stall), (0, 0, None))[2]
+            ratio = latency / eac if latency is not None and eac not in (None, 0) else None
             writer.writerow(
                 [
                     mode,
                     load,
                     stall,
                     runs,
-                    "" if p50 is None else f"{p50:.3f}",
-                    "" if p99 is None else f"{p99:.3f}",
+                    validators,
+                    "" if latency is None else f"{latency:.3f}",
                     "" if ratio is None else f"{ratio:.6f}",
                 ]
             )
@@ -103,8 +122,8 @@ def plot(path: Path, aggregate):
     for stall in stalls:
         row = []
         for load in loads:
-            full = aggregate.get(("full", load, stall), (0, None, None))[2]
-            eac = aggregate.get(("eac", load, stall), (0, None, None))[2]
+            full = aggregate.get(("full", load, stall), (0, 0, None))[2]
+            eac = aggregate.get(("eac", load, stall), (0, 0, None))[2]
             ratio = full / eac if full is not None and eac not in (None, 0) else math.nan
             row.append(ratio)
             if math.isfinite(ratio):
@@ -125,13 +144,13 @@ def plot(path: Path, aggregate):
     ax.set_yticks(range(len(stalls)), stalls)
     ax.set_xlabel("Offered load (tx/s)")
     ax.set_ylabel("Stall duration (s)")
-    ax.set_title("Pufferfish p99 latency / MysticetiEAC p99 latency")
+    ax.set_title("Boundary-transaction latency: Pufferfish / MysticetiEAC")
     for y, row in enumerate(matrix):
         for x, ratio in enumerate(row):
             ax.text(x, y, "NA" if not math.isfinite(ratio) else f"{ratio:.2f}",
                     ha="center", va="center", fontsize=9)
     colorbar = fig.colorbar(image, ax=ax)
-    colorbar.set_label("Latency ratio (<1 favors Pufferfish)")
+    colorbar.set_label("Boundary latency ratio (<1 favors Pufferfish)")
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, bbox_inches="tight")

@@ -105,6 +105,9 @@ def main():
         "speculative_snapshot_window_size",
         "speculative_snapshot_non_window_peak_size",
         "speculative_snapshot_store_size",
+        "direct_commit_stall_start_timestamp_ms",
+        "boundary_transaction_submission_timestamp_ms",
+        "boundary_transaction_commit_latency_us",
     }
 
     repeat_aggregates = defaultdict(list)

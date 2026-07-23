@@ -8,7 +8,7 @@ CALLER_PWD="$(pwd)"
 REPEAT="${1:-${REPEAT:-1}}"
 OUTPUT_ROOT="${2:-${OUTPUT_ROOT:-./results/load-stall-sweep}}"
 COMMITTEE_SIZE="${COMMITTEE_SIZE:-10}"
-LOADS="${LOADS:-250 500 750 1000 2000}"
+LOADS="${LOADS:-25 50 75 100}"
 STALL_DURATIONS="${STALL_DURATIONS:-0 5 10 20 40}"
 MODES="${MODES:-full eac}"
 STALL_START="${STALL_START:-10}"
@@ -20,12 +20,27 @@ if [[ "${OUTPUT_ROOT}" != /* ]]; then
 fi
 mkdir -p "${OUTPUT_ROOT}"
 
+run_is_complete() {
+    local run_dir=$1
+    local validator metrics_file
+
+    [[ -s "${run_dir}/run-meta.txt" && -s "${run_dir}/summary.csv" ]] || return 1
+    for validator in $(seq 0 $((COMMITTEE_SIZE - 1))); do
+        metrics_file="${run_dir}/validator-${validator}.metrics"
+        [[ -s "${metrics_file}" ]] || return 1
+        awk '
+            $1 == "boundary_transaction_commit_latency_us" && ($2 + 0) > 0 { found = 1 }
+            END { exit(found ? 0 : 1) }
+        ' "${metrics_file}" || return 1
+    done
+}
+
 for repeat in $(seq 1 "${REPEAT}"); do
     for mode in ${MODES}; do
         for load in ${LOADS}; do
             for stall_duration in ${STALL_DURATIONS}; do
                 run_dir="${OUTPUT_ROOT}/${mode}/load-${load}/stall-${stall_duration}/repeat-${repeat}"
-                if [[ -s "${run_dir}/run-meta.txt" && -s "${run_dir}/summary.csv" ]]; then
+                if run_is_complete "${run_dir}"; then
                     echo "Skipping completed run: ${run_dir}"
                     continue
                 fi
@@ -34,12 +49,8 @@ for repeat in $(seq 1 "${REPEAT}"); do
                 total_duration=$((STALL_START + stall_duration + RECOVERY_DURATION))
                 echo "Running mode=${mode} load=${load} stall=${stall_duration}s repeat=${repeat}/${REPEAT}"
 
-                if (( stall_duration == 0 )); then
-                    SKIP_BUILD="${SKIP_BUILD:-0}" bash "${SCRIPT_DIR}/speculative.sh" "${COMMITTEE_SIZE}" "${total_duration}" "${load}" "${mode}" "${WORKLOAD}" "${run_dir}"
-                else
-                    stall_end=$((STALL_START + stall_duration))
-                    SKIP_BUILD="${SKIP_BUILD:-0}" bash "${SCRIPT_DIR}/attackrun.sh" "${total_duration}" "${COMMITTEE_SIZE}" "${STALL_START}" "${stall_end}" "${load}" "${mode}" "${WORKLOAD}" "${run_dir}"
-                fi
+                stall_end=$((STALL_START + stall_duration))
+                SKIP_BUILD="${SKIP_BUILD:-0}" bash "${SCRIPT_DIR}/attackrun.sh" "${total_duration}" "${COMMITTEE_SIZE}" "${STALL_START}" "${stall_end}" "${load}" "${mode}" "${WORKLOAD}" "${run_dir}"
             done
         done
     done

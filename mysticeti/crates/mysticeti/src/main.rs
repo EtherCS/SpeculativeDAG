@@ -586,9 +586,9 @@ async fn attackrun(
     prediction_error_rate: u8,
     prediction_error_seed: u64,
 ) -> Result<()> {
-    if stall_end <= stall_start {
+    if stall_end < stall_start {
         return Err(eyre!(
-            "stall-end ({stall_end}) must be greater than stall-start ({stall_start})"
+            "stall-end ({stall_end}) must be greater than or equal to stall-start ({stall_start})"
         ));
     }
     tracing::warn!(

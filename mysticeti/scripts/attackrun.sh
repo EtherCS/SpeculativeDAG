@@ -22,8 +22,8 @@ PREDICTION_ERROR_RATE=${PREDICTION_ERROR_RATE:-0}
 PREDICTION_ERROR_SEED=${PREDICTION_ERROR_SEED:-0}
 RESOURCE_MONITOR_PID=""
 
-if (( STALL_END <= STALL_START )); then
-    echo "STALL_END must be greater than STALL_START" >&2
+if (( STALL_END < STALL_START )); then
+    echo "STALL_END must be greater than or equal to STALL_START" >&2
     exit 2
 fi
 if (( DURATION <= STALL_END )); then

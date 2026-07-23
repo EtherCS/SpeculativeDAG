@@ -197,6 +197,7 @@ impl SpeculativeExecutor {
                         if let BaseStatement::Share(share) = statement {
                             let creation_time = TransactionGenerator::extract_timestamp(share);
                             let latency = current_timestamp.saturating_sub(creation_time);
+                            record_boundary_transaction(&metrics, creation_time, latency);
                             metrics.transaction_committed_latency.observe(latency);
                             metrics
                                 .latency_s
@@ -648,6 +649,27 @@ impl SpeculativeExecutor {
     }
 }
 
+fn record_boundary_transaction(
+    metrics: &Metrics,
+    creation_time: std::time::Duration,
+    latency: std::time::Duration,
+) {
+    let creation_time_ms = creation_time.as_millis().min(i64::MAX as u128) as i64;
+    let stall_start_ms = metrics.direct_commit_stall_start_timestamp_ms.get();
+    let selected_time_ms = metrics.boundary_transaction_submission_timestamp_ms.get();
+    if stall_start_ms > 0
+        && creation_time_ms < stall_start_ms
+        && creation_time_ms > selected_time_ms
+    {
+        metrics
+            .boundary_transaction_submission_timestamp_ms
+            .set(creation_time_ms);
+        metrics
+            .boundary_transaction_commit_latency_us
+            .set(latency.as_micros().min(i64::MAX as u128) as i64);
+    }
+}
+
 /// Decode a share base statement to extract the transaction creation time, raw hex, and caller address
 fn decode_share_base_statement(data: &[u8]) -> (String, Address) {
     let decoded: TransactionWithHint = bincode::deserialize(&data).unwrap();
@@ -663,4 +685,61 @@ fn common_prefix_length(leaders_a: &[BlockReference], leaders_b: &[BlockReferenc
         .zip(leaders_b.iter())
         .take_while(|(a, b)| a == b)
         .count()
+}
+
+#[cfg(test)]
+mod boundary_transaction_tests {
+    use std::time::Duration;
+
+    use prometheus::Registry;
+
+    use super::record_boundary_transaction;
+    use crate::metrics::Metrics;
+
+    #[test]
+    fn selects_latest_committed_transaction_before_stall() {
+        let registry = Registry::new();
+        let (metrics, _reporter) = Metrics::new(&registry, None);
+        metrics.direct_commit_stall_start_timestamp_ms.set(1_000);
+
+        record_boundary_transaction(
+            &metrics,
+            Duration::from_millis(900),
+            Duration::from_millis(100),
+        );
+        record_boundary_transaction(
+            &metrics,
+            Duration::from_millis(800),
+            Duration::from_millis(300),
+        );
+        record_boundary_transaction(
+            &metrics,
+            Duration::from_millis(950),
+            Duration::from_millis(200),
+        );
+        record_boundary_transaction(
+            &metrics,
+            Duration::from_millis(1_000),
+            Duration::from_millis(600),
+        );
+        record_boundary_transaction(
+            &metrics,
+            Duration::from_millis(1_001),
+            Duration::from_millis(400),
+        );
+        record_boundary_transaction(
+            &metrics,
+            Duration::from_millis(950),
+            Duration::from_millis(500),
+        );
+
+        assert_eq!(
+            metrics.boundary_transaction_submission_timestamp_ms.get(),
+            950
+        );
+        assert_eq!(
+            metrics.boundary_transaction_commit_latency_us.get(),
+            200_000
+        );
+    }
 }
