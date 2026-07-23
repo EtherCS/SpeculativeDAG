@@ -13,6 +13,8 @@ mysticeti/logs/*
 **.ansi
 **-validator*
 
+results/
+
 /autobahn/
 
 mysticeti/crates/orchestrator/assets/settings.yml
